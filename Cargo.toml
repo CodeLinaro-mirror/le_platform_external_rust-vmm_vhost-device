@@ -3,7 +3,4 @@
 members = [
     "crates/gpio",
     "crates/i2c",
-    "crates/rng",
-    "crates/scsi",
-    "crates/vsock",
 ]
