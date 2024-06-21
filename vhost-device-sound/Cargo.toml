@@ -1,0 +1,40 @@
+[package]
+name = "vhost-device-sound"
+version = "0.1.0"
+authors = ["Manos Pitsidianakis <manos.pitsidianakis@linaro.org>", "Dorinda Bassey <dbassey@redhat.com>", "Matias Ezequiel Vara Larsen <mvaralar@redhat.com>"]
+description = "A virtio-sound device using the vhost-user protocol."
+repository = "https://github.com/rust-vmm/vhost-device"
+readme = "README.md"
+keywords = ["vhost", "sound", "virtio-sound", "virtio-snd", "virtio"]
+categories = ["multimedia::audio", "virtualization"]
+license = "Apache-2.0 OR BSD-3-Clause"
+edition = "2018"
+
+[features]
+xen = ["vm-memory/xen", "vhost/xen", "vhost-user-backend/xen"]
+default = ["alsa-backend", "pw-backend"]
+alsa-backend = ["dep:alsa"]
+pw-backend = ["pw"]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+thiserror = "1.0"
+vhost = { version = "0.11", features = ["vhost-user-backend"] }
+vhost-user-backend = "0.15"
+virtio-bindings = "0.2.1"
+virtio-queue = "0.12"
+vm-memory = "0.14.1"
+vmm-sys-util = "0.12"
+
+# Make alsa and pipewire backends available only on gnu
+[target.'cfg(target_env = "gnu")'.dependencies]
+alsa = { version = "0.9", optional = true }
+pw = { package = "pipewire", version = "0.8", optional = true }
+
+[dev-dependencies]
+rstest = "0.19.0"
+tempfile = "3.10"
+virtio-queue = { version = "0.12", features = ["test-utils"] }
+vm-memory = { version = "0.14.1", features = ["backend-mmap", "backend-atomic"] }

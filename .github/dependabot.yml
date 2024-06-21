@@ -4,10 +4,24 @@ updates:
   directory: "/"
   schedule:
     interval: weekly
-  open-pull-requests-limit: 3
   allow:
   - dependency-type: direct
   - dependency-type: indirect
+  groups:
+      vhost-device:
+        patterns:
+          - "*"
+- package-ecosystem: cargo
+  directory: "/staging/"
+  schedule:
+    interval: weekly
+  allow:
+  - dependency-type: direct
+  - dependency-type: indirect
+  groups:
+      vhost-device:
+        patterns:
+          - "*"
 - package-ecosystem: gitsubmodule
   directory: "/"
   schedule:
