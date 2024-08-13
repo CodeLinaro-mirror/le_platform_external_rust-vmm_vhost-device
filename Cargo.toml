@@ -3,4 +3,5 @@ resolver = "2"
 
 members = [
     "vhost-device-i2c",
+    "vhost-device-ssr",
 ]
