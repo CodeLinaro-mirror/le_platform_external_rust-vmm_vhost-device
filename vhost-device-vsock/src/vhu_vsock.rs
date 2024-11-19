@@ -28,7 +28,6 @@ pub(crate) type CidMap =
     HashMap<u64, (Arc<RwLock<RawPktsQ>>, Arc<RwLock<HashSet<String>>>, EventFd)>;
 
 const NUM_QUEUES: usize = 3;
-const QUEUE_SIZE: usize = 256;
 
 // New descriptors pending on the rx queue
 const RX_QUEUE_EVENT: u16 = 0;
@@ -87,7 +86,7 @@ pub(crate) enum Error {
     HandleEventNotEpollIn,
     #[error("Failed to handle unknown event")]
     HandleUnknownEvent,
-    #[error("Failed to accept new local socket connection")]
+    #[error("Failed to accept new local unix domain socket connection")]
     UnixAccept(std::io::Error),
     #[error("Failed to bind a unix stream")]
     UnixBind(std::io::Error),
@@ -119,8 +118,17 @@ pub(crate) enum Error {
     PktBufMissing,
     #[error("Failed to connect to unix socket")]
     UnixConnect(std::io::Error),
-    #[error("Unable to write to unix stream")]
-    UnixWrite,
+    #[cfg(feature = "backend_vsock")]
+    #[error("Failed to accept new local vsock socket connection")]
+    VsockAccept(std::io::Error),
+    #[cfg(feature = "backend_vsock")]
+    #[error("Failed to connect to vsock socket")]
+    VsockConnect(std::io::Error),
+    #[cfg(feature = "backend_vsock")]
+    #[error("Failed to bind a vsock stream")]
+    VsockBind(std::io::Error),
+    #[error("Unable to write to stream")]
+    StreamWrite,
     #[error("Unable to push data to local tx buffer")]
     LocalTxBufFull,
     #[error("Unable to flush data from local tx buffer")]
@@ -143,14 +151,31 @@ impl std::convert::From<Error> for std::io::Error {
     }
 }
 
+#[cfg(feature = "backend_vsock")]
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct VsockProxyInfo {
+    pub forward_cid: u32,
+    pub listen_ports: Vec<u32>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum BackendType {
+    /// unix domain socket path
+    UnixDomainSocket(String),
+    /// the vsock CID and ports
+    #[cfg(feature = "backend_vsock")]
+    Vsock(VsockProxyInfo),
+}
+
 #[derive(Debug, Clone)]
 /// This structure is the public API through which an external program
 /// is allowed to configure the backend.
 pub(crate) struct VsockConfig {
     guest_cid: u64,
     socket: String,
-    uds_path: String,
+    backend_info: BackendType,
     tx_buffer_size: u32,
+    queue_size: usize,
     groups: Vec<String>,
 }
 
@@ -160,15 +185,17 @@ impl VsockConfig {
     pub fn new(
         guest_cid: u64,
         socket: String,
-        uds_path: String,
+        backend_info: BackendType,
         tx_buffer_size: u32,
+        queue_size: usize,
         groups: Vec<String>,
     ) -> Self {
         Self {
             guest_cid,
             socket,
-            uds_path,
+            backend_info,
             tx_buffer_size,
+            queue_size,
             groups,
         }
     }
@@ -178,10 +205,8 @@ impl VsockConfig {
         self.guest_cid
     }
 
-    /// Return the path of the unix domain socket which is listening to
-    /// requests from the host side application.
-    pub fn get_uds_path(&self) -> String {
-        String::from(&self.uds_path)
+    pub fn get_backend_info(&self) -> BackendType {
+        self.backend_info.clone()
     }
 
     /// Return the path of the unix domain socket which is listening to
@@ -192,6 +217,10 @@ impl VsockConfig {
 
     pub fn get_tx_buffer_size(&self) -> u32 {
         self.tx_buffer_size
+    }
+
+    pub fn get_queue_size(&self) -> usize {
+        self.queue_size
     }
 
     pub fn get_groups(&self) -> Vec<String> {
@@ -229,6 +258,7 @@ unsafe impl ByteValued for VirtioVsockConfig {}
 
 pub(crate) struct VhostUserVsockBackend {
     config: VirtioVsockConfig,
+    queue_size: usize,
     pub threads: Vec<Mutex<VhostUserVsockThread>>,
     queues_per_thread: Vec<u64>,
     pub exit_event: EventFd,
@@ -237,7 +267,7 @@ pub(crate) struct VhostUserVsockBackend {
 impl VhostUserVsockBackend {
     pub fn new(config: VsockConfig, cid_map: Arc<RwLock<CidMap>>) -> Result<Self> {
         let thread = Mutex::new(VhostUserVsockThread::new(
-            config.get_uds_path(),
+            config.get_backend_info(),
             config.get_guest_cid(),
             config.get_tx_buffer_size(),
             config.get_groups(),
@@ -249,6 +279,7 @@ impl VhostUserVsockBackend {
             config: VirtioVsockConfig {
                 guest_cid: From::from(config.get_guest_cid()),
             },
+            queue_size: config.get_queue_size(),
             threads: vec![thread],
             queues_per_thread,
             exit_event: EventFd::new(EFD_NONBLOCK).map_err(Error::EventFdCreate)?,
@@ -265,7 +296,7 @@ impl VhostUserBackend for VhostUserVsockBackend {
     }
 
     fn max_queue_size(&self) -> usize {
-        QUEUE_SIZE
+        self.queue_size
     }
 
     fn features(&self) -> u64 {
@@ -374,36 +405,13 @@ mod tests {
     use tempfile::tempdir;
     use vhost_user_backend::VringT;
     use vm_memory::GuestAddress;
+    #[cfg(feature = "backend_vsock")]
+    use vsock::VsockListener;
 
     const CONN_TX_BUF_SIZE: u32 = 64 * 1024;
+    const QUEUE_SIZE: usize = 1024;
 
-    #[test]
-    fn test_vsock_backend() {
-        const CID: u64 = 3;
-
-        let groups_list: Vec<String> = vec![String::from("default")];
-
-        let test_dir = tempdir().expect("Could not create a temp test directory.");
-
-        let vhost_socket_path = test_dir
-            .path()
-            .join("test_vsock_backend.socket")
-            .display()
-            .to_string();
-        let vsock_socket_path = test_dir
-            .path()
-            .join("test_vsock_backend.vsock")
-            .display()
-            .to_string();
-
-        let config = VsockConfig::new(
-            CID,
-            vhost_socket_path.to_string(),
-            vsock_socket_path.to_string(),
-            CONN_TX_BUF_SIZE,
-            groups_list,
-        );
-
+    fn test_vsock_backend(config: VsockConfig, expected_cid: u64) {
         let cid_map: Arc<RwLock<CidMap>> = Arc::new(RwLock::new(HashMap::new()));
 
         let backend = VhostUserVsockBackend::new(config, cid_map);
@@ -438,7 +446,7 @@ mod tests {
         let config = backend.get_config(0, 8);
         assert_eq!(config.len(), 8);
         let cid = u64::from_le_bytes(config.try_into().unwrap());
-        assert_eq!(cid, CID);
+        assert_eq!(cid, expected_cid);
 
         let exit = backend.exit_event(0);
         assert!(exit.is_some());
@@ -455,11 +463,80 @@ mod tests {
 
         let ret = backend.handle_event(BACKEND_EVENT, EventSet::IN, &vrings, 0);
         assert!(ret.is_ok());
+    }
+
+    #[test]
+    fn test_vsock_backend_unix() {
+        const CID: u64 = 3;
+
+        let groups_list: Vec<String> = vec![String::from("default")];
+
+        let test_dir = tempdir().expect("Could not create a temp test directory.");
+
+        let vhost_socket_path = test_dir
+            .path()
+            .join("test_vsock_backend_unix.socket")
+            .display()
+            .to_string();
+        let vsock_socket_path = test_dir
+            .path()
+            .join("test_vsock_backend.vsock")
+            .display()
+            .to_string();
+
+        let config = VsockConfig::new(
+            CID,
+            vhost_socket_path.to_string(),
+            BackendType::UnixDomainSocket(vsock_socket_path.to_string()),
+            CONN_TX_BUF_SIZE,
+            QUEUE_SIZE,
+            groups_list,
+        );
+
+        test_vsock_backend(config, CID);
 
         // cleanup
         let _ = std::fs::remove_file(vhost_socket_path);
         let _ = std::fs::remove_file(vsock_socket_path);
+        test_dir.close().unwrap();
+    }
 
+    #[cfg(feature = "backend_vsock")]
+    #[test]
+    fn test_vsock_backend_vsock() {
+        if VsockListener::bind_with_cid_port(libc::VMADDR_CID_LOCAL, libc::VMADDR_PORT_ANY).is_err()
+        {
+            println!("  SKIPPED: AF_VSOCK is not available.");
+            return;
+        }
+
+        const CID: u64 = 3;
+
+        let groups_list: Vec<String> = vec![String::from("default")];
+
+        let test_dir = tempdir().expect("Could not create a temp test directory.");
+
+        let vhost_socket_path = test_dir
+            .path()
+            .join("test_vsock_backend.socket")
+            .display()
+            .to_string();
+        let config = VsockConfig::new(
+            CID,
+            vhost_socket_path.to_string(),
+            BackendType::Vsock(VsockProxyInfo {
+                forward_cid: 1,
+                listen_ports: vec![9001, 9002],
+            }),
+            CONN_TX_BUF_SIZE,
+            QUEUE_SIZE,
+            groups_list,
+        );
+
+        test_vsock_backend(config, CID);
+
+        // cleanup
+        let _ = std::fs::remove_file(vhost_socket_path);
         test_dir.close().unwrap();
     }
 
@@ -485,8 +562,9 @@ mod tests {
         let config = VsockConfig::new(
             CID,
             "/sys/not_allowed.socket".to_string(),
-            "/sys/not_allowed.vsock".to_string(),
+            BackendType::UnixDomainSocket("/sys/not_allowed.vsock".to_string()),
             CONN_TX_BUF_SIZE,
+            QUEUE_SIZE,
             groups.clone(),
         );
 
@@ -498,8 +576,9 @@ mod tests {
         let config = VsockConfig::new(
             CID,
             vhost_socket_path.to_string(),
-            vsock_socket_path.to_string(),
+            BackendType::UnixDomainSocket(vsock_socket_path.to_string()),
             CONN_TX_BUF_SIZE,
+            QUEUE_SIZE,
             groups,
         );
 
@@ -542,9 +621,30 @@ mod tests {
 
     #[test]
     fn test_vhu_vsock_structs() {
-        let config = VsockConfig::new(0, String::new(), String::new(), 0, vec![String::new()]);
+        let unix_config = VsockConfig::new(
+            0,
+            String::new(),
+            BackendType::UnixDomainSocket(String::new()),
+            0,
+            0,
+            vec![String::new()],
+        );
+        assert_eq!(format!("{unix_config:?}"), "VsockConfig { guest_cid: 0, socket: \"\", backend_info: UnixDomainSocket(\"\"), tx_buffer_size: 0, queue_size: 0, groups: [\"\"] }");
 
-        assert_eq!(format!("{config:?}"), "VsockConfig { guest_cid: 0, socket: \"\", uds_path: \"\", tx_buffer_size: 0, groups: [\"\"] }");
+        #[cfg(feature = "backend_vsock")]
+        let vsock_config = VsockConfig::new(
+            0,
+            String::new(),
+            BackendType::Vsock(VsockProxyInfo {
+                forward_cid: 1,
+                listen_ports: vec![9001, 9002],
+            }),
+            0,
+            0,
+            vec![String::new()],
+        );
+        #[cfg(feature = "backend_vsock")]
+        assert_eq!(format!("{vsock_config:?}"), "VsockConfig { guest_cid: 0, socket: \"\", backend_info: Vsock(VsockProxyInfo { forward_cid: 1, listen_ports: [9001, 9002] }), tx_buffer_size: 0, queue_size: 0, groups: [\"\"] }");
 
         let conn_map = ConnMapKey::new(0, 0);
         assert_eq!(

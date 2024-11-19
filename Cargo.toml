@@ -3,14 +3,5 @@ resolver = "2"
 
 members = [
     "vhost-device-i2c",
+    "vhost-device-ssr",
 ]
-
-# In vhost-device-vsock we use the `config` crate which now has the `yaml-rust`
-# dependency that is unmaintained as cargo audit is reporting.
-# See https://github.com/rust-vmm/vhost-device/issues/639
-#
-# They merged the fix, but for now they don't do a release because they don't
-# have a maintainer. To get the CI green, let's do this workaround, but before
-# the next release we have to find a solution.
-[patch.crates-io]
-config = { git = "https://github.com/mehcode/config-rs", rev = "e3c1d0b452639478662a44f15ef6d5b6d969bf9b" }
