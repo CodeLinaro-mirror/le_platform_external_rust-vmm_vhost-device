@@ -49,7 +49,7 @@ struct SsrArgs {
     socket_path: PathBuf,
 
     /// names for ssr client,
-    /// only support CDSP CDSP0 CDSP1 LPASS SLPI GPDSP0 GPDSP1
+    /// only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
     #[clap(
         short = 'c',
         long,
@@ -186,7 +186,7 @@ mod tests {
     fn verify_generate_socket_paths() {
         let args = SsrArgs {
             socket_path: PathBuf::from("/some/socket_path"),
-            clients_groups: vec![String::from("CDSP,CDSP0"), String::from("GPDSP0,GPDSP1")],
+            clients_groups: vec![String::from("CDSP,CDSP1"), String::from("GPDSP0,GPDSP1")],
         };
         let paths = args.generate_socket_paths();
 
@@ -206,13 +206,13 @@ mod tests {
         let default_args: SsrArgs = Parser::parse_from([
             "",
             "--socket-path=/some/socket_path",
-            "--clients-groups=CDSP,CDSP0;GPDSP0,GPDSP1",
+            "--clients-groups=CDSP;GPDSP0,GPDSP1",
         ]);
 
         // A valid configuration that should be equal to the above default configuration.
         let args = SsrArgs {
             socket_path: PathBuf::from("/some/socket_path"),
-            clients_groups: vec![String::from("CDSP,CDSP0"), String::from("GPDSP0,GPDSP1")],
+            clients_groups: vec![String::from("CDSP"), String::from("GPDSP0,GPDSP1")],
         };
 
         // All configuration elements should be what we expect them to be.  Using
@@ -221,14 +221,14 @@ mod tests {
 
         // Test short arguments
         let default_args: SsrArgs =
-            Parser::parse_from(["", "-s=/some/socket_path", "-c=CDSP,CDSP0;GPDSP0,GPDSP1"]);
+            Parser::parse_from(["", "-s=/some/socket_path", "-c=CDSP;GPDSP0,GPDSP1"]);
 
         assert_eq!(default_args, args);
     }
 
     #[test]
     fn verify_support_client_arguments() {
-        let clients_group = String::from(" CDSP ,CDSP0,CDSP1,LPASS,GPDSP0,GPDSP1,A,B,C");
+        let clients_group = String::from("CDSP,CDSP1,ADSP,GPDSP0,GPDSP1,A,B,C");
         let clients_list: Vec<String> = clients_group
             .split(',')
             .map(|s| s.trim().to_string())
@@ -238,9 +238,8 @@ mod tests {
             .collect();
         let expected_val = vec![
             String::from("CDSP"),
-            String::from("CDSP0"),
             String::from("CDSP1"),
-            String::from("LPASS"),
+            String::from("ADSP"),
             String::from("GPDSP0"),
             String::from("GPDSP1"),
         ];
