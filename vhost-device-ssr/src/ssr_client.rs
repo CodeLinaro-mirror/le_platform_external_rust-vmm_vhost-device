@@ -34,13 +34,12 @@ lazy_static! {
     ///  name -> (magic_num, ss_id)
     pub(crate) static ref Client_Map: HashMap<&'static str, (u64, u32)> = {
         let mut map = HashMap::new();
-        map.insert("LPASS", (MAGIC_LPASS, SS_ID_LPASS));
+        map.insert("ADSP", (MAGIC_LPASS, SS_ID_LPASS));
         map.insert("SLPI", (MAGIC_SLPI, SS_ID_SLPI));
         map.insert("CDSP", (MAGIC_CDSP0, SS_ID_CDSP));
-        map.insert("CDSP0", (MAGIC_CDSP0, SS_ID_CDSP));
-        map.insert("CDSP1", (MAGIC_CDSP1, SS_ID_GPDSP1));
+        map.insert("CDSP1", (MAGIC_CDSP1, SS_ID_CDSP1));
         map.insert("GPDSP0", (MAGIC_GPDSP0, SS_ID_GPDSP0));
-        map.insert("GPDSP1", (MAGIC_GPDSP1, SS_ID_GPDSP0));
+        map.insert("GPDSP1", (MAGIC_GPDSP1, SS_ID_GPDSP1));
         map
     };
 }
@@ -94,20 +93,20 @@ impl VhSsrCtx {
     pub fn get_response(&self) -> Option<(String, ssr_events)> {
         if self.ss_id == 0 && self.ssr_event == 0 {
             log::warn!("self ss_id is 0, but get called!");
-            None
-        } else {
-            let name = match self.ss_id {
-                SS_ID_LPASS => "adsp".to_string(),
-                SS_ID_MODEM => "modem".to_string(),
-                SS_ID_SLPI => "slpi".to_string(),
-                SS_ID_CDSP => "cdsp".to_string(),
-                SS_ID_CDSP1 => "cdsp1".to_string(),
-                SS_ID_GPDSP0 => "gpdsp0".to_string(),
-                SS_ID_GPDSP1 => "gpdsp1".to_string(),
-                _ => "unknown client".to_string(),
-            };
-            Some((name, self.ssr_event))
+            return None;
         }
+        let name = match self.ss_id {
+            SS_ID_LPASS => "adsp",
+            SS_ID_MODEM => "modem",
+            SS_ID_SLPI => "slpi",
+            SS_ID_CDSP => "cdsp",
+            SS_ID_CDSP1 => "cdsp1",
+            SS_ID_GPDSP0 => "gpdsp0",
+            SS_ID_GPDSP1 => "gpdsp1",
+            _ => "unknown client",
+        }
+        .to_string();
+        Some((name, self.ssr_event))
     }
 
     pub fn reset(&mut self) {
@@ -234,8 +233,10 @@ impl SsrClient for SsrVuClient {
         let client_id = Client_Map.get(client_name.as_str()).unwrap().1;
         let event_mask = (client_id << SS_ID_SHIFT)
             | (SSR_EVENT_FAULT_NOTIFY
-                | SSR_EVENT_POWERDOWN
-                | SSR_EVENT_POWER_UP
+                | SSR_EVENT_RESTART_START
+                | SSR_EVENT_RESTART_FAILED
+                | SSR_EVENT_PRE_DS
+                | SSR_EVENT_DUMMY
                 | SSR_EVENT_RESTART_COMPLETE);
         let mut ssr_handle: *mut ::std::os::raw::c_void = null_mut();
         let priv_data = AtomicPtr::new(&mut ssr_handle);
@@ -305,7 +306,7 @@ mod tests {
             .unwrap();
         for _ in 0..10 {
             let ctx_ptr = &mut *ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
-            unsafe { ssr_virtio_event_handler(SS_ID_CDSP, SSR_EVENT_POWERDOWN, ctx_ptr) };
+            unsafe { ssr_virtio_event_handler(SS_ID_CDSP, SSR_EVENT_FAULT_NOTIFY, ctx_ptr) };
         }
         let mut ready_events = vec![EpollEvent::default(); 10];
         let ev_count = epoll_handler.wait(-1, &mut ready_events[..]).unwrap();
@@ -316,7 +317,7 @@ mod tests {
                 let res = cxt_unlocked.get_response().unwrap();
                 assert_eq!(x, 16 * 10);
                 assert_eq!(res.0, "cdsp".to_string());
-                assert_eq!(res.1, SSR_EVENT_POWERDOWN);
+                assert_eq!(res.1, SSR_EVENT_FAULT_NOTIFY);
             }
         }
     }
@@ -391,8 +392,10 @@ mod tests {
         let client_id = Client_Map.get(client_name.as_str()).unwrap().1;
         let event_mask = (client_id << SS_ID_SHIFT)
             | (SSR_EVENT_FAULT_NOTIFY
-                | SSR_EVENT_POWERDOWN
-                | SSR_EVENT_POWER_UP
+                | SSR_EVENT_RESTART_START
+                | SSR_EVENT_RESTART_FAILED
+                | SSR_EVENT_PRE_DS
+                | SSR_EVENT_DUMMY
                 | SSR_EVENT_RESTART_COMPLETE);
         let mut ssr_handle: *mut ::std::os::raw::c_void = null_mut();
         let priv_data = AtomicPtr::new(&mut ssr_handle);
