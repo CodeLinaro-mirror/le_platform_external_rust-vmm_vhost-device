@@ -188,8 +188,9 @@ impl SsrClient for SsrVuClient {
     }
 
     fn register(&self) -> Result<u64, SsrClientError> {
-        let name = CString::new(self.client_name.as_str())
-            .unwrap_or_else(|_| panic!("New client name: {} failed", self.client_name));
+        let register_name = String::from("vhost-device-ssr:") + self.client_name.as_str();
+        let name = CString::new(register_name.as_str())
+            .unwrap_or_else(|_| panic!("New client name: {} failed", register_name));
         let priv_data = self.get_priv_ptr();
         let ctx_ptr =
             &mut *self.ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
@@ -205,7 +206,7 @@ impl SsrClient for SsrVuClient {
             match ret {
                 0 => Ok(0),
                 _ => Err(SsrClientError::RegisterCallbackEvents(
-                    self.client_name.clone(),
+                    register_name.clone(),
                 )),
             }
         }
