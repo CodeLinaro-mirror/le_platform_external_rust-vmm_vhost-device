@@ -107,7 +107,7 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
         ));
         let mut daemon = VhostUserDaemon::new(
             String::from("vhost-device-ssr-backend"),
-            vu_ssr_backend,
+            Arc::clone(&vu_ssr_backend),
             GuestMemoryAtomic::new(GuestMemoryMmap::new()),
         )
         .map_err(Error::CouldNotCreateDaemon)?;
@@ -117,7 +117,11 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
             .register_listener(raw_fd, EventSet::IN, SSR_EVENT_IN_VRING_EPOLL as u64)
             .map_err(|_| Error::CouldNotRegisterNotifyEvent)?;
 
-        daemon.serve(&socket).map_err(Error::ServeFailed)?;
+        let serve_result = daemon.serve(&socket).map_err(Error::ServeFailed);
+
+        vu_ssr_backend.read().unwrap().unregister_clients();
+
+        serve_result?
     }
 }
 

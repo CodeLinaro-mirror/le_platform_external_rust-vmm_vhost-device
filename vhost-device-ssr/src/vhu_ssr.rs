@@ -107,6 +107,14 @@ impl<T: SsrClient> VuSsrBackend<T> {
         })
     }
 
+    pub fn unregister_clients(&self) {
+        for client in &self.ssr_clients {
+            if let Err(e) = client.unregister() {
+                log::error!("Error unregistering {:?}", e);
+            }
+        }
+    }
+
     /// Process the event once ssr_callback called and dispatch it to guest
     fn process_event(&mut self, vring: &VringRwLock, out: VirtioSsrOutHdr) -> Result<bool> {
         let mem = self.mem.as_ref().unwrap().memory();
