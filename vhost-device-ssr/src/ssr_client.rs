@@ -22,8 +22,8 @@ use vmm_sys_util::eventfd::EventFd;
 pub(crate) enum SsrClientError {
     #[error("Register {0} callback events failed")]
     RegisterCallbackEvents(String),
-    #[error("Unregister {0} callback events failed")]
-    UnregisterCallbackEvents(String),
+    #[error("Unregister {0} callback events failed: {1}")]
+    UnregisterCallbackEvents(String, i32),
     #[error("Trigger {0} ssr failed")]
     TriggerSsr(String),
 }
@@ -147,8 +147,8 @@ pub(crate) struct SsrVuClient {
     client_name: String,
     event_mask: u32,
     event_handler: cb_func_with_ctx_t,
-    /* *mut *mut std::os::raw::c_void */
-    priv_data: AtomicPtr<*mut ::std::os::raw::c_void>,
+    /* *mut std::os::raw::c_void */
+    priv_data: AtomicPtr<::std::os::raw::c_void>,
 }
 
 impl SsrVuClient {
@@ -158,7 +158,7 @@ impl SsrVuClient {
         event_mask: u32,
         ctx: Arc<Mutex<VhSsrCtx>>,
         event_handler: cb_func_with_ctx_t,
-        priv_data: AtomicPtr<*mut ::std::os::raw::c_void>,
+        priv_data: AtomicPtr<::std::os::raw::c_void>,
     ) -> Self {
         SsrVuClient {
             client_magic,
@@ -170,7 +170,7 @@ impl SsrVuClient {
         }
     }
 
-    pub fn get_priv_ptr(&self) -> *mut *mut ::std::os::raw::c_void {
+    pub fn get_priv_ptr(&self) -> *mut ::std::os::raw::c_void {
         self.priv_data.load(Ordering::Relaxed)
     }
 }
@@ -179,7 +179,7 @@ impl SsrClient for SsrVuClient {
     fn trigger(&self) -> Result<u64, SsrClientError> {
         let priv_data = self.get_priv_ptr();
         unsafe {
-            let ret = trigger_ssr(*priv_data, self.client_magic);
+            let ret = trigger_ssr(priv_data, self.client_magic);
             match ret {
                 0 => Ok(0),
                 _ => Err(SsrClientError::TriggerSsr(self.client_name.clone())),
@@ -191,7 +191,6 @@ impl SsrClient for SsrVuClient {
         let register_name = String::from("vhost-device-ssr:") + self.client_name.as_str();
         let name = CString::new(register_name.as_str())
             .unwrap_or_else(|_| panic!("New client name: {} failed", register_name));
-        let priv_data = self.get_priv_ptr();
         let ctx_ptr =
             &mut *self.ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
         unsafe {
@@ -199,7 +198,7 @@ impl SsrClient for SsrVuClient {
                 self.client_magic,
                 self.event_handler,
                 self.event_mask,
-                priv_data,
+                self.priv_data.as_ptr(),
                 name.as_ptr(),
                 ctx_ptr,
             );
@@ -213,13 +212,14 @@ impl SsrClient for SsrVuClient {
     }
 
     fn unregister(&self) -> Result<u64, SsrClientError> {
-        let priv_data = self.get_priv_ptr();
+        let client_ctx_ptr = self.get_priv_ptr();
         unsafe {
-            let ret = ssr_unregister_callback(*priv_data);
+            let ret = ssr_unregister_callback(client_ctx_ptr);
             match ret {
                 0 => Ok(0),
                 _ => Err(SsrClientError::UnregisterCallbackEvents(
                     self.client_name.clone(),
+                    ret,
                 )),
             }
         }
@@ -239,8 +239,8 @@ impl SsrClient for SsrVuClient {
                 | SSR_EVENT_PRE_DS
                 | SSR_EVENT_DUMMY
                 | SSR_EVENT_RESTART_COMPLETE);
-        let mut ssr_handle: *mut ::std::os::raw::c_void = null_mut();
-        let priv_data = AtomicPtr::new(&mut ssr_handle);
+        let mut client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
+        let priv_data = AtomicPtr::new(client_ctx_ptr);
         let client = Self::new(
             client_magic,
             client_name,
@@ -398,8 +398,8 @@ mod tests {
                 | SSR_EVENT_PRE_DS
                 | SSR_EVENT_DUMMY
                 | SSR_EVENT_RESTART_COMPLETE);
-        let mut ssr_handle: *mut ::std::os::raw::c_void = null_mut();
-        let priv_data = AtomicPtr::new(&mut ssr_handle);
+        let mut client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
+        let priv_data = AtomicPtr::new(client_ctx_ptr);
         let client = SsrVuClient::new(
             client_magic,
             client_name,
@@ -410,7 +410,7 @@ mod tests {
         );
         assert_eq!(
             client.get_priv_ptr(),
-            &mut ssr_handle as *mut *mut ::std::os::raw::c_void
+            client_ctx_ptr as *mut ::std::os::raw::c_void
         )
     }
 
