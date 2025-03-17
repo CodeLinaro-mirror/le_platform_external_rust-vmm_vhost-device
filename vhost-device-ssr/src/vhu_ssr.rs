@@ -117,8 +117,12 @@ impl<T: SsrClient> VuSsrBackend<T> {
 
     /// Process the event once ssr_callback called and dispatch it to guest
     fn process_event(&mut self, vring: &VringRwLock, out: VirtioSsrOutHdr) -> Result<bool> {
-        let mem = self.mem.as_ref().unwrap().memory();
+        if vring.get_ref().get_call().is_none() {
+            log::warn!("Receive ssr-rm msg but virtio is not ready!!");
+            return Ok(false);
+        }
 
+        let mem = self.mem.as_ref().unwrap().memory();
         let desc_chain = vring
             .get_mut()
             .get_queue_mut()
