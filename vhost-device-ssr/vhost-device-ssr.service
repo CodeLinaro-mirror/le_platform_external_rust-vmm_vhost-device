@@ -3,7 +3,8 @@
 [Unit]
 Description = launch vhost-device-ssr
 
-After = remote-fs.target
+After = ssr-rm.service
+Requires = ssr-rm.service
 Before = qcrosvm.service
 
 [Service]

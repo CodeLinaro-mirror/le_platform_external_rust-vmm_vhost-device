@@ -17,7 +17,7 @@ Options:
   -s, --socket-path <SOCKET>
           Location of vhost-user Unix domain socket
   -c, --clients-groups <CLIENTS_GROUPS>
-          names for ssr client, only support CDSP CDSP0 CDSP1 LPASS SLPI GPDSP0 GPDSP1
+          names for ssr client, only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
   -h, --help
           Print help
   -V, --version
@@ -30,14 +30,14 @@ The daemon should be started first:
 
 ```shell
 host# vhost-device-ssr --socket-path /some/path/ssr.sock    \
-      --clients-groups CDSP0,CDSP1;GPDSP0,GPDSP1
+      --clients-groups CDSP,CDSP1;GPDSP0,GPDSP1
 ```
 
 Note that from the above command the socket path "/some/path/ssr.sock0" and
-"/some/path/ssr.sock1" will be created for  CDSP0,CDSP1 and  GPDSP0 GPDSP1
+"/some/path/ssr.sock1" will be created for  CDSP,CDSP1 and  GPDSP0 GPDSP1
 respectively. Use `;` as delimiter.
 
-Now only support CDSP CDSP0 CDSP1 LPASS SLPI GPDSP0 GPDSP1
+Now only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
 
 ## License
 

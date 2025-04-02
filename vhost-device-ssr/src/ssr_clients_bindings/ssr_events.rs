@@ -19,9 +19,8 @@ pub const SSR_EVENT_FAULT_NOTIFY: ssr_events = 1;
 pub const SSR_EVENT_RESTART_START: ssr_events = 2;
 pub const SSR_EVENT_RESTART_COMPLETE: ssr_events = 4;
 pub const SSR_EVENT_RESTART_FAILED: ssr_events = 8;
-pub const SSR_EVENT_POWERDOWN: ssr_events = 16;
-pub const SSR_EVENT_POWER_UP: ssr_events = 32;
-pub const SSR_SOC_RESTART: ssr_events = 64;
+pub const SSR_EVENT_PRE_DS: ssr_events = 16;
+pub const SSR_SOC_RESTART: ssr_events = 32;
 pub const SSR_EVENT_DUMMY: ssr_events = 128;
 
 pub const MAGIC_LPASS: u64 = 0x6C70617373;
