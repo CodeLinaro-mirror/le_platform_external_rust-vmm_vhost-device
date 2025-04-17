@@ -90,19 +90,20 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
     socket: PathBuf,
     clients_list: Vec<String>,
 ) -> Result<()> {
-    loop {
-        let notify_fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
-        let ssr_test_callback: cb_func_with_ctx_t = Some(ssr_virtio_event_handler);
-        let ctx = Arc::new(Mutex::new(VhSsrCtx::new(Arc::clone(&notify_fd))));
+    let notify_fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
+    let ssr_test_callback: cb_func_with_ctx_t = Some(ssr_virtio_event_handler);
+    let ctx = Arc::new(Mutex::new(VhSsrCtx::new(Arc::clone(&notify_fd))));
 
-        let ssr_vu_clients = clients_list
+    let ssr_vu_clients = Arc::new(
+        clients_list
             .iter()
             .map(|c| D::new_default(c.to_string(), Arc::clone(&ctx), ssr_test_callback))
-            .collect();
+            .collect(),
+    );
 
-        let raw_fd = notify_fd.as_raw_fd();
+    loop {
         let vu_ssr_backend = Arc::new(RwLock::new(
-            VuSsrBackend::new(ssr_vu_clients, Arc::clone(&ctx))
+            VuSsrBackend::new(Arc::clone(&ssr_vu_clients), Arc::clone(&ctx))
                 .map_err(Error::CouldNotCreateBackend)?,
         ));
         let mut daemon = VhostUserDaemon::new(
@@ -114,14 +115,14 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
 
         let handlers = daemon.get_epoll_handlers();
         handlers[0]
-            .register_listener(raw_fd, EventSet::IN, SSR_EVENT_IN_VRING_EPOLL as u64)
+            .register_listener(notify_fd.as_raw_fd(), EventSet::IN, SSR_EVENT_IN_VRING_EPOLL as u64)
             .map_err(|_| Error::CouldNotRegisterNotifyEvent)?;
 
-        let serve_result = daemon.serve(&socket).map_err(Error::ServeFailed);
-
-        vu_ssr_backend.read().unwrap().unregister_clients();
-
-        serve_result?
+        if let Err(e) = daemon.serve(&socket).map_err(Error::ServeFailed) {
+            log::error!("Error serving daemon: {}", e);
+            vu_ssr_backend.read().unwrap().unregister_clients();
+            return Err(e);
+        }
     }
 }
 

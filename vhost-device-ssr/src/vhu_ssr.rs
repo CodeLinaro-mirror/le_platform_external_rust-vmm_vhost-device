@@ -86,7 +86,7 @@ impl From<VuSsrError> for io::Error {
 }
 
 pub(crate) struct VuSsrBackend<T: SsrClient> {
-    ssr_clients: Vec<T>,
+    ssr_clients: Arc<Vec<T>>,
     ctx: Arc<Mutex<VhSsrCtx>>,
     event_idx: bool,
     pub exit_event: EventFd,
@@ -95,7 +95,7 @@ pub(crate) struct VuSsrBackend<T: SsrClient> {
 
 impl<T: SsrClient> VuSsrBackend<T> {
     pub fn new(
-        ssr_clients: Vec<T>,
+        ssr_clients: Arc<Vec<T>>,
         ctx: Arc<Mutex<VhSsrCtx>>,
     ) -> std::result::Result<Self, std::io::Error> {
         Ok(VuSsrBackend {
@@ -108,7 +108,7 @@ impl<T: SsrClient> VuSsrBackend<T> {
     }
 
     pub fn unregister_clients(&self) {
-        for client in &self.ssr_clients {
+        for client in self.ssr_clients.iter() {
             if let Err(e) = client.unregister() {
                 log::error!("Error unregistering {:?}", e);
             }
