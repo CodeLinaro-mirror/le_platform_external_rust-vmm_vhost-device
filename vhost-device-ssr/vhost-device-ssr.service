@@ -3,9 +3,11 @@
 [Unit]
 Description = launch vhost-device-ssr
 
-After = ssr-rm.service
+After = ssr-rm.service tmp.mount
 Requires = ssr-rm.service
-Before = qcrosvm.service
+Before = qcrosvm.service shutdown.target
+Conflicts = shutdown.target
+DefaultDependencies = no
 
 [Service]
 Environment=RUST_LOG=info
