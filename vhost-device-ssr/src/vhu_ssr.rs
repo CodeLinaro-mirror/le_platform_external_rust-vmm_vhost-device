@@ -266,6 +266,7 @@ impl<T: 'static + SsrClient + Sync + Send> VhostUserBackendMut for VuSsrBackend<
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
+    use std::fs::File;
     use std::result::Result;
     use vhost_device_ssr::ssr_clients_bindings::ssr_api::cb_func_with_ctx_t;
     use virtio_queue::Descriptor;
@@ -317,7 +318,7 @@ mod tests {
             MockSsrClient::new_default("test0".to_string(), ctx.clone(), ssr_test_callback);
         let ssr_client1 =
             MockSsrClient::new_default("test1".to_string(), ctx.clone(), ssr_test_callback);
-        VuSsrBackend::new(vec![ssr_client0, ssr_client1], ctx).unwrap()
+        VuSsrBackend::new(Arc::new(vec![ssr_client0, ssr_client1]), ctx).unwrap()
     }
 
     #[test]
@@ -372,6 +373,10 @@ mod tests {
         // Artificial Vring
         let vring = VringRwLock::new(mem, 0x100).unwrap();
         vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
+
+        // set vring call, otherwise process_event return Ok(false), see commit d8a6418b3487191dcd439e51d133ea99e019aef1
+        let file = unsafe { File::create("/dev/null").ok()};
+        vring.set_call(file);
         vring.set_queue_ready(false);
 
         //Unavailable ssr event, return Ok(false)
@@ -426,6 +431,8 @@ mod tests {
         // Artificial Vring
         let vring = VringRwLock::new(mem, 0x100).unwrap();
         vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
+        let file = unsafe { File::create("/dev/null").ok()};
+        vring.set_call(file);
         vring.set_queue_ready(false);
 
         //Unavailable ssr event, return Ok(false)
