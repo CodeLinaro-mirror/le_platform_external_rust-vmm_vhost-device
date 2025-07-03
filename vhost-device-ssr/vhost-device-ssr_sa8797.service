@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+
+[Unit]
+Description = launch vhost-device-ssr
+
+After = ssr-rm.service
+Requires = ssr-rm.service
+Before = qcrosvm.service
+
+[Service]
+Environment=RUST_LOG=info
+ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=ADSP,ADSP1,ADSP2,CDSP,CDSP1,CDSP2,CDSP3 --enable-sd-notify
+Type=notify
+NotifyAccess=main
+[Install]
+WantedBy = multi-user.target
