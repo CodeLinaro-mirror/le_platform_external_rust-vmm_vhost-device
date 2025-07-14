@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: BSD-3-Clause-Clear
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+[Unit]
+Description=Service to start vhost-device-i2c daemon
+
+After=remote-fs.target
+
+Before=qcrosvm.service
+
+[Service]
+ExecStart=/usr/bin/vhost-device-i2c \
+--socket-path=/tmp/linux-vm2-i2c-skt \
+--socket-count=1 \
+--device-list "19:67:75:79"
+
+[Install]
+WantedBy=multi-user.target
+
