@@ -11,6 +11,7 @@ mod vhu_ssr;
 use clap::Parser;
 use log::error;
 use ssr_client::{ssr_virtio_event_handler, Client_Map, SsrClient, SsrVuClient, VhSsrCtx};
+use vhost::vhost_user::Listener;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::os::fd::AsRawFd;
@@ -49,7 +50,8 @@ struct SsrArgs {
     socket_path: PathBuf,
 
     /// names for ssr client,
-    /// only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
+    /// support CDSP CDSP1 CDSP2 CDSP3 ADSP ADSP1 ADSP2 SLPI GPDSP0 GPDSP1
+    /// ADSP1,ADSP2, CDSP2 and CDSP3 are only applicable on SA8797.
     #[clap(
         short = 'c',
         long,
@@ -58,6 +60,14 @@ struct SsrArgs {
         required = true
     )]
     clients_groups: Vec<String>,
+
+    /// Enable sd_notify
+    #[clap(
+        short,
+        long,
+        default_value_t = false
+    )]
+    enable_sd_notify: bool,
 }
 
 impl SsrArgs {
@@ -89,6 +99,7 @@ impl SsrArgs {
 pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
     socket: PathBuf,
     clients_list: Vec<String>,
+    enable_sd_notify: bool,
 ) -> Result<()> {
     let notify_fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
     let ssr_test_callback: cb_func_with_ctx_t = Some(ssr_virtio_event_handler);
@@ -118,7 +129,32 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
             .register_listener(notify_fd.as_raw_fd(), EventSet::IN, SSR_EVENT_IN_VRING_EPOLL as u64)
             .map_err(|_| Error::CouldNotRegisterNotifyEvent)?;
 
-        if let Err(e) = daemon.serve(&socket).map_err(Error::ServeFailed) {
+        let listener = Listener::new(&socket, true).map_err(vhost_user_backend::Error::CreateBackendListener).unwrap();
+
+        // Notify to systemd once unix_sock is ready to listen
+        if enable_sd_notify {
+            sd_notify::notify(true, &[sd_notify::NotifyState::Ready]).expect("Failed to send ready notification");
+        }
+
+        daemon.start(listener).unwrap();
+        let result = daemon.wait();
+
+        // Regardless of the result, we want to signal worker threads to exit
+        handlers[0].send_exit_event();
+
+        // For this convenience function we are not treating certain "expected"
+        // outcomes as error. Disconnects and partial messages can be usual
+        // behaviour seen from quitting guests.
+        let err = match &result {
+            Err(e) => match e {
+                vhost_user_backend::Error::HandleRequest(vhost::vhost_user::Error::Disconnected) => Ok(()),
+                vhost_user_backend::Error::HandleRequest(vhost::vhost_user::Error::PartialMessage) =>  Ok(()),
+                _ => return result.map_err(Error::ServeFailed),
+            },
+            _ => return result.map_err(Error::ServeFailed),
+        };
+
+        if let Err(e) = err {
             log::error!("Error serving daemon: {}", e);
             vu_ssr_backend.read().unwrap().unregister_clients();
             return Err(e);
@@ -128,6 +164,7 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
 
 pub(crate) fn start_backend<D: 'static + SsrClient + Send + Sync>(args: SsrArgs) -> Result<()> {
     let mut handles = HashMap::new();
+    let enable_sd_notify = args.enable_sd_notify;
     let (senders, receiver) = std::sync::mpsc::channel();
     for (thread_id, (socket, clients_group)) in args
         .generate_socket_paths()
@@ -149,7 +186,7 @@ pub(crate) fn start_backend<D: 'static + SsrClient + Send + Sync>(args: SsrArgs)
             .name(name.clone())
             .spawn(move || {
                 let result = std::panic::catch_unwind(move || {
-                    start_backend_server::<D>(socket, clients_list)
+                    start_backend_server::<D>(socket, clients_list, enable_sd_notify)
                 });
 
                 // Notify the main thread that we are done.

@@ -35,13 +35,38 @@ lazy_static! {
     pub(crate) static ref Client_Map: HashMap<&'static str, (u64, u32)> = {
         let mut map = HashMap::new();
         map.insert("ADSP", (MAGIC_LPASS, SS_ID_LPASS));
+        map.insert("ADSP1", (MAGIC_ADSP1, SS_ID_ADSP1));
+        map.insert("ADSP2", (MAGIC_ADSP2, SS_ID_ADSP2));
         map.insert("SLPI", (MAGIC_SLPI, SS_ID_SLPI));
         map.insert("CDSP", (MAGIC_CDSP0, SS_ID_CDSP));
         map.insert("CDSP1", (MAGIC_CDSP1, SS_ID_CDSP1));
+        map.insert("CDSP2", (MAGIC_CDSP2, SS_ID_CDSP2));
+        map.insert("CDSP3", (MAGIC_CDSP3, SS_ID_CDSP3));
         map.insert("GPDSP0", (MAGIC_GPDSP0, SS_ID_GPDSP0));
         map.insert("GPDSP1", (MAGIC_GPDSP1, SS_ID_GPDSP1));
         map
     };
+
+    /// mapping ss_id values to their corresponding client names
+    ///
+    /// SSID -> qcom-ssr-name
+
+    pub(crate) static ref Ssr_Map: HashMap<u32, &'static str> = {
+        let mut ssr_map: HashMap<u32, &'static str> = HashMap::new();
+        ssr_map.insert(SS_ID_LPASS, "adsp");
+        ssr_map.insert(SS_ID_ADSP1, "adsp1");
+        ssr_map.insert(SS_ID_ADSP2, "adsp2");
+        ssr_map.insert(SS_ID_MODEM, "modem");
+        ssr_map.insert(SS_ID_SLPI, "slpi");
+        ssr_map.insert(SS_ID_CDSP, "cdsp");
+        ssr_map.insert(SS_ID_CDSP1, "cdsp1");
+        ssr_map.insert(SS_ID_CDSP2, "cdsp2");
+        ssr_map.insert(SS_ID_CDSP3, "cdsp3");
+        ssr_map.insert(SS_ID_GPDSP0, "gpdsp0");
+        ssr_map.insert(SS_ID_GPDSP1, "gpdsp1");
+        ssr_map
+    };
+
 }
 
 /// callback registered into SSR
@@ -95,17 +120,9 @@ impl VhSsrCtx {
             log::warn!("self ss_id is 0, but get called!");
             return None;
         }
-        let name = match self.ss_id {
-            SS_ID_LPASS => "adsp",
-            SS_ID_MODEM => "modem",
-            SS_ID_SLPI => "slpi",
-            SS_ID_CDSP => "cdsp",
-            SS_ID_CDSP1 => "cdsp1",
-            SS_ID_GPDSP0 => "gpdsp0",
-            SS_ID_GPDSP1 => "gpdsp1",
-            _ => "unknown client",
-        }
-        .to_string();
+
+        // Look up the client name by ss_id; use "unknown client" if not found
+        let name = Ssr_Map.get(&self.ss_id).unwrap_or(&"unknown client").to_string();
         Some((name, self.ssr_event))
     }
 
