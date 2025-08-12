@@ -229,6 +229,7 @@ mod tests {
         let args = SsrArgs {
             socket_path: PathBuf::from("/some/socket_path"),
             clients_groups: vec![String::from("CDSP,CDSP1"), String::from("GPDSP0,GPDSP1")],
+            enable_sd_notify: false
         };
         let paths = args.generate_socket_paths();
 
@@ -255,6 +256,7 @@ mod tests {
         let args = SsrArgs {
             socket_path: PathBuf::from("/some/socket_path"),
             clients_groups: vec![String::from("CDSP"), String::from("GPDSP0,GPDSP1")],
+            enable_sd_notify: false
         };
 
         // All configuration elements should be what we expect them to be.  Using
