@@ -212,7 +212,7 @@ extern "C" {
     pub fn ssr_register_callback_events(
         client_magic: u64,
         event_handler: cb_func_with_ctx_t,
-        event_mask: u32,
+        event_mask: u64,
         priv_data: *mut *mut ::std::os::raw::c_void,
         client_name: *const ::std::os::raw::c_char,
         ctx: *mut ::std::os::raw::c_void,

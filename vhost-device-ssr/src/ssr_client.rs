@@ -162,7 +162,7 @@ pub(crate) struct SsrVuClient {
     ctx: Arc<Mutex<VhSsrCtx>>,
     client_magic: u64,
     client_name: String,
-    event_mask: u32,
+    event_mask: u64,
     event_handler: cb_func_with_ctx_t,
     /* *mut std::os::raw::c_void */
     priv_data: AtomicPtr<::std::os::raw::c_void>,
@@ -172,7 +172,7 @@ impl SsrVuClient {
     pub fn new(
         client_magic: u64,
         client_name: String,
-        event_mask: u32,
+        event_mask: u64,
         ctx: Arc<Mutex<VhSsrCtx>>,
         event_handler: cb_func_with_ctx_t,
         priv_data: AtomicPtr<::std::os::raw::c_void>,
@@ -249,13 +249,14 @@ impl SsrClient for SsrVuClient {
     ) -> Self {
         let client_magic = Client_Map.get(client_name.as_str()).unwrap().0;
         let client_id = Client_Map.get(client_name.as_str()).unwrap().1;
-        let event_mask = (client_id << SS_ID_SHIFT)
-            | (SSR_EVENT_FAULT_NOTIFY
-                | SSR_EVENT_RESTART_START
-                | SSR_EVENT_RESTART_FAILED
-                | SSR_EVENT_PRE_DS
-                | SSR_EVENT_DUMMY
-                | SSR_EVENT_RESTART_COMPLETE);
+        let event_bits: u32 = SSR_EVENT_FAULT_NOTIFY
+            | SSR_EVENT_RESTART_START
+            | SSR_EVENT_RESTART_FAILED
+            | SSR_EVENT_PRE_DS
+            | SSR_EVENT_DUMMY
+            | SSR_EVENT_RESTART_COMPLETE;
+
+        let event_mask: u64 = ((client_id as u64) << (SS_ID_SHIFT as u64)) | (event_bits as u64);
         let mut client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
         let priv_data = AtomicPtr::new(client_ctx_ptr);
         let client = Self::new(
@@ -408,13 +409,15 @@ mod tests {
         let client_name = "CDSP".to_string();
         let client_magic = Client_Map.get(client_name.as_str()).unwrap().0;
         let client_id = Client_Map.get(client_name.as_str()).unwrap().1;
-        let event_mask = (client_id << SS_ID_SHIFT)
-            | (SSR_EVENT_FAULT_NOTIFY
-                | SSR_EVENT_RESTART_START
-                | SSR_EVENT_RESTART_FAILED
-                | SSR_EVENT_PRE_DS
-                | SSR_EVENT_DUMMY
-                | SSR_EVENT_RESTART_COMPLETE);
+        let event_bits: u32 = SSR_EVENT_FAULT_NOTIFY
+            | SSR_EVENT_RESTART_START
+            | SSR_EVENT_RESTART_FAILED
+            | SSR_EVENT_PRE_DS
+            | SSR_EVENT_DUMMY
+            | SSR_EVENT_RESTART_COMPLETE;
+
+        let event_mask: u64 = ((client_id as u64) << (SS_ID_SHIFT as u64)) | (event_bits as u64);
+
         let mut client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
         let priv_data = AtomicPtr::new(client_ctx_ptr);
         let client = SsrVuClient::new(
