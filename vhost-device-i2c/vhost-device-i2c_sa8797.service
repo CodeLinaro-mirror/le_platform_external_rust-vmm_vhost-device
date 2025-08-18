@@ -11,7 +11,7 @@ Before=qcrosvm.service
 ExecStart=/usr/bin/vhost-device-i2c \
 --socket-path=/tmp/linux-vm2-i2c-skt \
 --socket-count=1 \
---device-list "19:67:75:79"
+--device-list "9:67:75:79"
 
 [Install]
 WantedBy=multi-user.target
