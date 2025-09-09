@@ -10,7 +10,7 @@ Before = qcrosvm.service
 
 [Service]
 Environment=RUST_LOG=info
-ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=ADSP,ADSP1,ADSP2,CDSP,CDSP1,CDSP2,CDSP3 --enable-sd-notify
+ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1,CDSP2,CDSP3,HPASSC0,HPASSC1,HPASSC2 --enable-sd-notify
 Type=notify
 NotifyAccess=main
 [Install]
