@@ -50,8 +50,8 @@ struct SsrArgs {
     socket_path: PathBuf,
 
     /// names for ssr client,
-    /// support CDSP CDSP1 CDSP2 CDSP3 ADSP ADSP1 ADSP2 SLPI GPDSP0 GPDSP1
-    /// ADSP1,ADSP2, CDSP2 and CDSP3 are only applicable on SA8797.
+    /// Support CDSP, CDSP1/2/3, ADSP, ADSP1/2 SLPI, GPDSP0/1, HPASSC0/1/2.
+    /// ADSP1/2, CDSP2/3 and HPASSC0/1/2 are only applicable on SA8797.
     #[clap(
         short = 'c',
         long,

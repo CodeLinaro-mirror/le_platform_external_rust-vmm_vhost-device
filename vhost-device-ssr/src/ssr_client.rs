@@ -44,6 +44,9 @@ lazy_static! {
         map.insert("CDSP3", (MAGIC_CDSP3, SS_ID_CDSP3));
         map.insert("GPDSP0", (MAGIC_GPDSP0, SS_ID_GPDSP0));
         map.insert("GPDSP1", (MAGIC_GPDSP1, SS_ID_GPDSP1));
+        map.insert("HPASSC0", (MAGIC_HPASSC0, SS_ID_HPASSC0));
+        map.insert("HPASSC1", (MAGIC_HPASSC1, SS_ID_HPASSC1));
+        map.insert("HPASSC2", (MAGIC_HPASSC2, SS_ID_HPASSC2));
         map
     };
 
@@ -64,6 +67,9 @@ lazy_static! {
         ssr_map.insert(SS_ID_CDSP3, "cdsp3");
         ssr_map.insert(SS_ID_GPDSP0, "gpdsp0");
         ssr_map.insert(SS_ID_GPDSP1, "gpdsp1");
+        ssr_map.insert(SS_ID_HPASSC0, "adsp");
+        ssr_map.insert(SS_ID_HPASSC1, "adsp1");
+        ssr_map.insert(SS_ID_HPASSC2, "adsp2");
         ssr_map
     };
 
