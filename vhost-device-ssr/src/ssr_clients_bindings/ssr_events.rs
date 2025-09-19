@@ -17,6 +17,9 @@ pub const SS_ID_ADSP2: ssr_ss_id = 512;
 pub const SS_ID_CDSP2: ssr_ss_id = 1024;
 pub const SS_ID_CDSP3: ssr_ss_id = 2048;
 pub const SS_ID_INVALID: ssr_ss_id = 255;
+pub const SS_ID_HPASSC0: ssr_ss_id = 0x2000;
+pub const SS_ID_HPASSC1: ssr_ss_id = 0x4000;
+pub const SS_ID_HPASSC2: ssr_ss_id = 0x8000;
 
 pub type ssr_events = ::std::os::raw::c_uint;
 pub const SSR_EVENT_FAULT_NOTIFY: ssr_events = 1;
@@ -37,6 +40,9 @@ pub const MAGIC_ADSP1: u64 = 0x8438438748;
 pub const MAGIC_ADSP2: u64 = 0x6967009789;
 pub const MAGIC_GPDSP0: u64 = 0x9C59169846;
 pub const MAGIC_GPDSP1: u64 = 0x7A47787699;
+pub const MAGIC_HPASSC0: u64 = 0x68656C6C6F;
+pub const MAGIC_HPASSC1: u64 = 0x736D617274;
+pub const MAGIC_HPASSC2: u64 = 0x6C6F766572;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
