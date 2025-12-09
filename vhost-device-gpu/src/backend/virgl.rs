@@ -174,9 +174,13 @@ impl VirglRendererAdapter {
         gpu_backend: Option<GpuBackend>,
     ) -> io::Result<Self> {
         let capsets = config.capsets();
+        let venus_enabled = capsets.contains(GpuCapset::VENUS);
+        let virgl_enabled = capsets.intersects(GpuCapset::VIRGL | GpuCapset::VIRGL2);
+
         let virglrenderer_flags = VirglRendererFlags::new()
-            .use_virgl(true)
-            .use_venus(true)
+            .use_virgl(virgl_enabled)
+            .use_venus(venus_enabled)
+            .use_render_server(venus_enabled)
             .use_egl(config.flags().use_egl)
             .use_gles(config.flags().use_gles)
             .use_glx(config.flags().use_glx)
