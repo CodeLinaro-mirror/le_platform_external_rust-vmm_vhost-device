@@ -6,9 +6,9 @@
 #![allow(non_camel_case_types)]
 
 use std::{
+    borrow::Cow,
     cmp::min,
     convert::From,
-    ffi::CStr,
     fmt::{self, Display},
     io::{self, Read, Write},
     marker::PhantomData,
@@ -446,14 +446,9 @@ impl Default for virtio_gpu_ctx_create {
 }
 
 impl virtio_gpu_ctx_create {
-    pub fn get_debug_name(&self) -> String {
-        CStr::from_bytes_with_nul(
-            &self.debug_name[..min(64, <Le32 as Into<u32>>::into(self.nlen) as usize)],
-        )
-        .map_or_else(
-            |err| format!("Err({err})"),
-            |c_str| c_str.to_string_lossy().into_owned(),
-        )
+    pub fn get_debug_name(&self) -> Cow<'_, str> {
+        let len = min(64, <Le32 as Into<u32>>::into(self.nlen) as usize);
+        String::from_utf8_lossy(&self.debug_name[..len])
     }
 }
 impl fmt::Debug for virtio_gpu_ctx_create {
@@ -1364,8 +1359,9 @@ mod tests {
 
     #[test]
     fn test_virtio_gpu_ctx_create_debug() {
-        let bytes = b"test_debug\0";
-        let original = virtio_gpu_ctx_create {
+        // Test without null terminator (typical case)
+        let bytes = b"test_debug";
+        let ctx = virtio_gpu_ctx_create {
             debug_name: {
                 let mut debug_name = [0; 64];
                 debug_name[..bytes.len()].copy_from_slice(bytes);
@@ -1374,11 +1370,25 @@ mod tests {
             context_init: 0.into(),
             nlen: (bytes.len() as u32).into(),
         };
-
-        let debug_string = format!("{original:?}");
         assert_eq!(
-            debug_string,
+            format!("{ctx:?}"),
             "virtio_gpu_ctx_create { debug_name: \"test_debug\", context_init: Le32(0), .. }"
+        );
+
+        // Test with null terminator included in nlen (edge case - should preserve it)
+        let bytes_with_null = b"test_debug\0";
+        let ctx_with_null = virtio_gpu_ctx_create {
+            debug_name: {
+                let mut debug_name = [0; 64];
+                debug_name[..bytes_with_null.len()].copy_from_slice(bytes_with_null);
+                debug_name
+            },
+            context_init: 0.into(),
+            nlen: (bytes_with_null.len() as u32).into(),
+        };
+        assert_eq!(
+            format!("{ctx_with_null:?}"),
+            "virtio_gpu_ctx_create { debug_name: \"test_debug\\0\", context_init: Le32(0), .. }"
         );
     }
 
