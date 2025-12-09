@@ -27,6 +27,7 @@ A virtio-gpu device using the vhost-user protocol.
           Possible values:
           - virgl:            [virglrenderer] OpenGL implementation, superseded by Virgl2
           - virgl2:           [virglrenderer] OpenGL implementation
+          - venus:            [virglrenderer] Vulkan implementation with hardware acceleration
           - gfxstream-vulkan: [gfxstream] Vulkan implementation (partial support only)
              NOTE: Can only be used for 2D display output for now, there is no hardware acceleration yet
           - gfxstream-gles:   [gfxstream] OpenGL ES implementation (partial support only)
@@ -82,21 +83,13 @@ with GNU libc, so the CI is setup to not build this device for musl targets.
 It might be possible to build those libraries using musl and then build the gpu
 device, but this is not tested.
 
-We are currently only supporting sharing the display output to QEMU through a
-socket using the transfer_read operation triggered by
-`VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D` to transfer data from and to virtio-gpu 3D
-resources. It'll be nice to have support for directly sharing display output
-resource using dmabuf.
+This device does not yet support the `VIRTIO_GPU_CMD_SET_SCANOUT_BLOB` feature.
+Regular SET_SCANOUT handles both 2D and blob resources.
 
-This device does not yet support the `VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB`,
-`VIRTIO_GPU_CMD_SET_SCANOUT_BLOB` and `VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID` features. 
-This requires https://github.com/rust-vmm/vhost/pull/251, which in turn requires QEMU API stabilization.
-Because blob resources are not yet supported, some capsets are limited:
-- Venus (Vulkan implementation in virglrenderer project) support is not available at all.
-- gfxstream-vulkan and gfxstream-gles support are exposed, but can practically only be used for display output, there is no hardware acceleration yet.
 ## Features
 
 This crate supports three GPU backends: virglrenderer, gfxstream (both enabled by default), and null.
+Blob resource support enables Venus (Vulkan) for hardware-accelerated Vulkan rendering.
 
 The **virglrenderer** backend uses the [virglrenderer-rs](https://crates.io/crates/virglrenderer-rs)
 crate, which provides Rust bindings to the native virglrenderer library. It translates

@@ -22,9 +22,10 @@ macro_rules! handle_adapter {
                 Some(renderer) => renderer,
                 None => {
                     // Pass $vrings to the call
-                    let (control_vring, gpu_backend) = $self.extract_backend_and_vring($vrings)?;
+                    let (control_vring, backend, gpu_backend) =
+                        $self.extract_backend_and_vring($vrings)?;
 
-                    let renderer = $new_adapter(control_vring, gpu_backend)?;
+                    let renderer = $new_adapter(control_vring, backend, gpu_backend)?;
 
                     event_poll_fd = renderer.get_event_poll_fd();
                     maybe_renderer.insert(renderer)
@@ -51,8 +52,8 @@ use rutabaga_gfx::RutabagaFence;
 use thiserror::Error as ThisError;
 use vhost::vhost_user::{
     gpu_message::{VhostUserGpuCursorPos, VhostUserGpuEdidRequest},
-    message::{VhostUserProtocolFeatures, VhostUserVirtioFeatures},
-    GpuBackend,
+    message::{VhostUserProtocolFeatures, VhostUserShMemConfig, VhostUserVirtioFeatures},
+    Backend, GpuBackend,
 };
 use vhost_user_backend::{VhostUserBackend, VringEpollHandler, VringRwLock, VringT};
 use virtio_bindings::{
@@ -79,7 +80,7 @@ use crate::backend::gfxstream::GfxstreamAdapter;
 use crate::backend::virgl::VirglRendererAdapter;
 use crate::{
     backend::null::NullAdapter,
-    gpu_types::{ResourceCreate3d, Transfer3DDesc, VirtioGpuRing},
+    gpu_types::{ResourceCreate3d, ResourceCreateBlob, Transfer3DDesc, VirtioGpuRing},
     protocol::{
         virtio_gpu_ctrl_hdr, virtio_gpu_ctx_create, virtio_gpu_get_edid,
         virtio_gpu_resource_create_2d, virtio_gpu_resource_create_3d, virtio_gpu_transfer_host_3d,
@@ -93,6 +94,10 @@ use crate::{
     renderer::Renderer,
     GpuConfig, GpuMode,
 };
+
+/// Size of the HOST_VISIBLE shared memory region for blob resource mapping
+/// (8GB).
+const SHMEM_SIZE: u64 = 1 << 33;
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -141,6 +146,7 @@ impl From<Error> for io::Error {
 struct VhostUserGpuBackendInner {
     virtio_cfg: VirtioGpuConfig,
     event_idx_enabled: bool,
+    backend: Option<Backend>,
     gpu_backend: Option<GpuBackend>,
     exit_consumer: EventConsumer,
     exit_notifier: EventNotifier,
@@ -175,6 +181,7 @@ impl VhostUserGpuBackend {
                 num_capsets: Le32::from(gpu_config.capsets().num_capsets()),
             },
             event_idx_enabled: false,
+            backend: None,
             gpu_backend: None,
             exit_consumer,
             exit_notifier,
@@ -208,7 +215,7 @@ impl VhostUserGpuBackend {
 impl VhostUserGpuBackendInner {
     fn process_gpu_command(
         renderer: &mut dyn Renderer,
-        mem: &GuestMemoryMmap,
+        mem: Arc<GuestMemoryMmap>,
         hdr: virtio_gpu_ctrl_hdr,
         cmd: GpuCommand,
         acked_features: u64,
@@ -228,7 +235,7 @@ impl VhostUserGpuBackendInner {
             }
             GpuCommand::TransferToHost2d(req) => Self::handle_transfer_to_host_2d(renderer, req),
             GpuCommand::ResourceAttachBacking(req, iovecs) => {
-                renderer.attach_backing(req.resource_id.into(), mem, iovecs)
+                renderer.attach_backing(req.resource_id.into(), mem.clone(), iovecs)
             }
             GpuCommand::ResourceDetachBacking(req) => {
                 renderer.detach_backing(req.resource_id.into())
@@ -268,18 +275,50 @@ impl VhostUserGpuBackendInner {
                 fence_ids,
                 mut cmd_data,
             } => renderer.submit_command(hdr.ctx_id.into(), &mut cmd_data, &fence_ids),
-            GpuCommand::ResourceCreateBlob(_) => {
-                panic!("virtio_gpu: GpuCommand::ResourceCreateBlob unimplemented")
+            GpuCommand::ResourceCreateBlob(info, vecs) => {
+                if (acked_features & (1 << VIRTIO_GPU_F_RESOURCE_BLOB)) == 0 {
+                    warn!(
+                        "VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB command received but \
+                         VIRTIO_GPU_F_RESOURCE_BLOB feature not negotiated"
+                    );
+                    return Err(ErrInvalidParameter);
+                }
+                renderer.resource_create_blob(
+                    hdr.ctx_id.into(),
+                    ResourceCreateBlob {
+                        resource_id: info.resource_id.into(),
+                        blob_id: info.blob_id.into(),
+                        blob_mem: info.blob_mem.into(),
+                        blob_flags: info.blob_flags.into(),
+                        size: info.size.into(),
+                    },
+                    vecs,
+                    &mem,
+                )
             }
 
             GpuCommand::SetScanoutBlob(_) => {
                 panic!("virtio_gpu: GpuCommand::SetScanoutBlob unimplemented")
             }
-            GpuCommand::ResourceMapBlob(_) => {
-                panic!("virtio_gpu: GpuCommand::ResourceMapBlob unimplemented")
+            GpuCommand::ResourceMapBlob(info) => {
+                if (acked_features & (1 << VIRTIO_GPU_F_RESOURCE_BLOB)) == 0 {
+                    warn!(
+                        "VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB command received but \
+                         VIRTIO_GPU_F_RESOURCE_BLOB feature not negotiated"
+                    );
+                    return Err(ErrInvalidParameter);
+                }
+                renderer.resource_map_blob(info.resource_id.into(), info.offset.into())
             }
-            GpuCommand::ResourceUnmapBlob(_) => {
-                panic!("virtio_gpu: GpuCommand::ResourceUnmapBlob unimplemented")
+            GpuCommand::ResourceUnmapBlob(info) => {
+                if (acked_features & (1 << VIRTIO_GPU_F_RESOURCE_BLOB)) == 0 {
+                    warn!(
+                        "VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB command received but \
+                         VIRTIO_GPU_F_RESOURCE_BLOB feature not negotiated"
+                    );
+                    return Err(ErrInvalidParameter);
+                }
+                renderer.resource_unmap_blob(info.resource_id.into())
             }
         }
     }
@@ -442,7 +481,7 @@ impl VhostUserGpuBackendInner {
                 let cmd_name = gpu_cmd.command_name();
                 let response_result = Self::process_gpu_command(
                     renderer,
-                    &mem,
+                    mem.clone(),
                     ctrl_hdr,
                     gpu_cmd,
                     self.acked_features,
@@ -609,17 +648,19 @@ impl VhostUserGpuBackendInner {
     fn extract_backend_and_vring<'a>(
         &mut self,
         vrings: &'a [VringRwLock],
-    ) -> IoResult<(&'a VringRwLock, Option<GpuBackend>)> {
+    ) -> IoResult<(&'a VringRwLock, Backend, Option<GpuBackend>)> {
         let control_vring = &vrings[CONTROL_QUEUE as usize];
-        let backend = self.gpu_backend.take();
-
-        if !self.gpu_config.flags().headless && backend.is_none() {
+        let backend = self
+            .backend
+            .take()
+            .ok_or_else(|| io::Error::other("set_backend_req_fd() not called, Backend missing"))?;
+        let gpu_backend = self.gpu_backend.take();
+        if !self.gpu_config.flags().headless && gpu_backend.is_none() {
             return Err(io::Error::other(
                 "set_gpu_socket() not called, GpuBackend missing",
             ));
         }
-
-        Ok((control_vring, backend))
+        Ok((control_vring, backend, gpu_backend))
     }
 
     fn lazy_init_and_handle_event(
@@ -639,9 +680,10 @@ impl VhostUserGpuBackendInner {
             GpuMode::Gfxstream => handle_adapter!(
                 GfxstreamAdapter,
                 TLS_GFXSTREAM,
-                |control_vring, gpu_backend| -> io::Result<GfxstreamAdapter> {
+                |control_vring, backend, gpu_backend| -> io::Result<GfxstreamAdapter> {
                     Ok(GfxstreamAdapter::new(
                         control_vring,
+                        backend,
                         &self.gpu_config,
                         gpu_backend,
                     ))
@@ -655,8 +697,8 @@ impl VhostUserGpuBackendInner {
             GpuMode::VirglRenderer => handle_adapter!(
                 VirglRendererAdapter,
                 TLS_VIRGL,
-                |control_vring, gpu_backend| {
-                    VirglRendererAdapter::new(control_vring, &self.gpu_config, gpu_backend)
+                |control_vring, backend, gpu_backend| {
+                    VirglRendererAdapter::new(control_vring, backend, &self.gpu_config, gpu_backend)
                 },
                 self,
                 device_event,
@@ -666,10 +708,11 @@ impl VhostUserGpuBackendInner {
             GpuMode::Null => handle_adapter!(
                 NullAdapter,
                 TLS_NULL,
-                |control_vring, gpu_backend| -> io::Result<NullAdapter> {
+                |control_vring, backend, gpu_backend| -> io::Result<NullAdapter> {
                     Ok(NullAdapter::new(
                         control_vring,
                         &self.gpu_config,
+                        backend,
                         gpu_backend,
                     ))
                 },
@@ -731,7 +774,15 @@ impl VhostUserBackend for VhostUserGpuBackend {
 
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
         debug!("Protocol features called");
-        VhostUserProtocolFeatures::CONFIG | VhostUserProtocolFeatures::MQ
+        VhostUserProtocolFeatures::CONFIG
+            | VhostUserProtocolFeatures::MQ
+            | VhostUserProtocolFeatures::BACKEND_REQ
+            | VhostUserProtocolFeatures::BACKEND_SEND_FD
+            | VhostUserProtocolFeatures::SHMEM
+    }
+
+    fn get_shmem_config(&self) -> IoResult<VhostUserShMemConfig> {
+        Ok(VhostUserShMemConfig::new(1, &[0, SHMEM_SIZE]))
     }
 
     fn acked_features(&self, features: u64) {
@@ -748,6 +799,11 @@ impl VhostUserBackend for VhostUserGpuBackend {
         debug!("Update memory called");
         self.inner.lock().unwrap().mem = Some(mem);
         Ok(())
+    }
+
+    fn set_backend_req_fd(&self, backend: Backend) {
+        trace!("Got set_backend_req_fd");
+        self.inner.lock().unwrap().backend = Some(backend);
     }
 
     fn set_gpu_socket(&self, backend: GpuBackend) -> IoResult<()> {
@@ -829,23 +885,28 @@ mod tests {
     use super::*;
     use crate::{
         backend::virgl::VirglRendererAdapter,
-        gpu_types::{ResourceCreate3d, Transfer3DDesc, VirtioGpuRing},
+        gpu_types::{ResourceCreate3d, ResourceCreateBlob, Transfer3DDesc, VirtioGpuRing},
         protocol::{
             virtio_gpu_ctrl_hdr, virtio_gpu_ctx_create, virtio_gpu_ctx_destroy,
             virtio_gpu_ctx_resource, virtio_gpu_get_capset, virtio_gpu_get_capset_info,
             virtio_gpu_mem_entry, virtio_gpu_rect, virtio_gpu_resource_assign_uuid,
             virtio_gpu_resource_attach_backing, virtio_gpu_resource_create_2d,
-            virtio_gpu_resource_detach_backing, virtio_gpu_resource_flush,
-            virtio_gpu_resource_unref, virtio_gpu_set_scanout,
-            GpuResponse::{self, OkCapset, OkCapsetInfo, OkDisplayInfo, OkEdid, OkNoData},
+            virtio_gpu_resource_create_blob, virtio_gpu_resource_detach_backing,
+            virtio_gpu_resource_flush, virtio_gpu_resource_map_blob,
+            virtio_gpu_resource_unmap_blob, virtio_gpu_resource_unref, virtio_gpu_set_scanout,
+            GpuResponse::{
+                self, OkCapset, OkCapsetInfo, OkDisplayInfo, OkEdid, OkMapInfo, OkNoData,
+            },
             VIRTIO_GPU_BIND_RENDER_TARGET, VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE,
             VIRTIO_GPU_CMD_CTX_CREATE, VIRTIO_GPU_CMD_CTX_DESTROY,
             VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
-            VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
-            VIRTIO_GPU_CMD_RESOURCE_FLUSH, VIRTIO_GPU_CMD_SET_SCANOUT,
-            VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
-            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D, VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
-            VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_GPU_TEXTURE_2D,
+            VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB,
+            VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
+            VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
+            VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D,
+            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D,
+            VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM, VIRTIO_GPU_RESP_ERR_UNSPEC,
+            VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_GPU_TEXTURE_2D,
         },
         renderer::Renderer,
         testutils::{create_vring, TestingDescChainArgs},
@@ -864,11 +925,9 @@ mod tests {
             fn resource_create_blob(
                 &mut self,
                 ctx_id: u32,
-                resource_id: u32,
-                blob_id: u64,
-                size: u64,
-                blob_mem: u32,
-                blob_flags: u32,
+                resource_create_blob: ResourceCreateBlob,
+                vecs: Vec<(GuestAddress, usize)>,
+                mem: &GuestMemoryMmap,
             ) -> VirtioGpuResult;
             fn resource_map_blob(&mut self, resource_id: u32, offset: u64) -> VirtioGpuResult;
             fn resource_unmap_blob(&mut self, resource_id: u32) -> VirtioGpuResult;
@@ -886,7 +945,7 @@ mod tests {
             fn attach_backing(
                 &mut self,
                 resource_id: u32,
-                mem: &GuestMemoryMmap,
+                mem: Arc<GuestMemoryMmap>,
                 vecs: Vec<(GuestAddress, usize)>,
             ) -> VirtioGpuResult;
             fn detach_backing(&mut self, resource_id: u32) -> VirtioGpuResult;
@@ -960,34 +1019,40 @@ mod tests {
         (frontend, backend)
     }
 
+    fn dummy_backend_request_socket() -> Backend {
+        let (_frontend, backend) = UnixStream::pair().unwrap();
+        Backend::from_stream(backend)
+    }
+
     #[test]
     fn test_process_gpu_command() {
         let (_, mem) = init();
         let hdr = virtio_gpu_ctrl_hdr::default();
-        let acked_features = 1 << VIRTIO_GPU_F_RESOURCE_UUID;
 
-        let test_cmd = |cmd: GpuCommand, setup: fn(&mut MockMockRenderer)| {
+        let test_cmd = |cmd: GpuCommand, features: u64, setup: fn(&mut MockMockRenderer)| {
             let mut mock_renderer = MockMockRenderer::new();
             mock_renderer.expect_force_ctx_0().return_const(());
             setup(&mut mock_renderer);
             VhostUserGpuBackendInner::process_gpu_command(
                 &mut mock_renderer,
-                &mem.memory(),
+                mem.memory().into_inner(),
                 hdr,
                 cmd,
-                acked_features,
+                features,
             )
         };
 
+        let acked_features = 1 << VIRTIO_GPU_F_RESOURCE_UUID;
+
         let cmd = GpuCommand::GetDisplayInfo;
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_display_info()
                 .return_once(|| Ok(OkDisplayInfo(vec![(1280, 720, true)])));
         });
         assert_matches!(result, Ok(OkDisplayInfo(_)));
 
         let cmd = GpuCommand::GetEdid(virtio_gpu_get_edid::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_get_edid().return_once(|_| {
                 Ok(OkEdid {
                     blob: Box::new([0xff; 512]),
@@ -997,32 +1062,32 @@ mod tests {
         assert_matches!(result, Ok(OkEdid { .. }));
 
         let cmd = GpuCommand::ResourceCreate2d(virtio_gpu_resource_create_2d::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_resource_create_3d()
                 .return_once(|_, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::ResourceUnref(virtio_gpu_resource_unref::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_unref_resource().return_once(|_| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::SetScanout(virtio_gpu_set_scanout::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_set_scanout().return_once(|_, _, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::ResourceFlush(virtio_gpu_resource_flush::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_flush_resource().return_once(|_, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::TransferToHost2d(virtio_gpu_transfer_to_host_2d::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_transfer_write_2d()
                 .return_once(|_, _, _| Ok(OkNoData));
         });
@@ -1032,33 +1097,33 @@ mod tests {
             virtio_gpu_resource_attach_backing::default(),
             Vec::default(),
         );
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_attach_backing()
                 .return_once(|_, _, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::ResourceDetachBacking(virtio_gpu_resource_detach_backing::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_detach_backing().return_once(|_| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::UpdateCursor(virtio_gpu_update_cursor::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_update_cursor()
                 .return_once(|_, _, _, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::MoveCursor(virtio_gpu_update_cursor::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_move_cursor().return_once(|_, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::GetCapsetInfo(virtio_gpu_get_capset_info::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_get_capset_info().return_once(|_| {
                 Ok(OkCapsetInfo {
                     capset_id: 1,
@@ -1077,7 +1142,7 @@ mod tests {
         );
 
         let cmd = GpuCommand::GetCapset(virtio_gpu_get_capset::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             // Fixed E0559: Correctly constructing the OkCapset tuple variant with a Vec<u8>
             g.expect_get_capset()
                 .return_once(|_, _| Ok(OkCapset(vec![0; 1])));
@@ -1085,48 +1150,48 @@ mod tests {
         assert_matches!(result, Ok(OkCapset { .. }));
 
         let cmd = GpuCommand::CtxCreate(virtio_gpu_ctx_create::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_create_context()
                 .return_once(|_, _, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::CtxDestroy(virtio_gpu_ctx_destroy::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_destroy_context().return_once(|_| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::CtxAttachResource(virtio_gpu_ctx_resource::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_context_attach_resource()
                 .return_once(|_, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::CtxDetachResource(virtio_gpu_ctx_resource::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_context_detach_resource()
                 .return_once(|_, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::ResourceCreate3d(virtio_gpu_resource_create_3d::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_resource_create_3d()
                 .return_once(|_, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::TransferToHost3d(virtio_gpu_transfer_host_3d::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_transfer_write()
                 .return_once(|_, _, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::TransferFromHost3d(virtio_gpu_transfer_host_3d::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_transfer_read()
                 .return_once(|_, _, _, _| Ok(OkNoData));
         });
@@ -1136,14 +1201,14 @@ mod tests {
             cmd_data: vec![0xff; 512],
             fence_ids: vec![],
         };
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_submit_command()
                 .return_once(|_, _, _| Ok(OkNoData));
         });
         assert_matches!(result, Ok(OkNoData));
 
         let cmd = GpuCommand::ResourceAssignUuid(virtio_gpu_resource_assign_uuid::default());
-        let result = test_cmd(cmd, |g| {
+        let result = test_cmd(cmd, acked_features, |g| {
             g.expect_resource_assign_uuid().return_once(|_| {
                 Ok(GpuResponse::OkResourceUuid {
                     uuid: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
@@ -1151,6 +1216,30 @@ mod tests {
             });
         });
         assert_matches!(result, Ok(GpuResponse::OkResourceUuid { .. }));
+
+        // Test blob commands WITH VIRTIO_GPU_F_RESOURCE_BLOB feature
+        let blob_features = (1 << VIRTIO_GPU_F_RESOURCE_UUID) | (1 << VIRTIO_GPU_F_RESOURCE_BLOB);
+
+        let cmd =
+            GpuCommand::ResourceCreateBlob(virtio_gpu_resource_create_blob::default(), vec![]);
+        let result = test_cmd(cmd, blob_features, |g| {
+            g.expect_resource_create_blob()
+                .return_once(|_, _, _, _| Ok(OkNoData));
+        });
+        assert_matches!(result, Ok(OkNoData));
+
+        let cmd = GpuCommand::ResourceMapBlob(virtio_gpu_resource_map_blob::default());
+        let result = test_cmd(cmd, blob_features, |g| {
+            g.expect_resource_map_blob()
+                .return_once(|_, _| Ok(OkMapInfo { map_info: 0 }));
+        });
+        assert_matches!(result, Ok(OkMapInfo { .. }));
+
+        let cmd = GpuCommand::ResourceUnmapBlob(virtio_gpu_resource_unmap_blob::default());
+        let result = test_cmd(cmd, blob_features, |g| {
+            g.expect_resource_unmap_blob().return_once(|_| Ok(OkNoData));
+        });
+        assert_matches!(result, Ok(OkNoData));
     }
 
     fn create_control_vring(
@@ -1470,7 +1559,10 @@ mod tests {
             .unwrap();
 
         let (control_vring, _, _) = create_control_vring(&mem, &[]);
-        let mut adapter = VirglRendererAdapter::new(&control_vring, &config, None).unwrap();
+        let (backend_stream, _) = UnixStream::pair().unwrap();
+        let backend = Backend::from_stream(backend_stream);
+        let mut adapter =
+            VirglRendererAdapter::new(&control_vring, backend, &config, None).unwrap();
 
         let resource_id = 42;
         let create_req = ResourceCreate3d {
@@ -1499,7 +1591,7 @@ mod tests {
         #[test]
         fn test_verify_backend() {
             let gpu_config = GpuConfigBuilder::default()
-                .set_gpu_mode(GpuMode::VirglRenderer)
+                .set_gpu_mode(GpuMode::Null)
                 .set_flags(GpuFlags::default())
                 .build()
                 .unwrap();
@@ -1510,8 +1602,18 @@ mod tests {
             assert_eq!(backend.features(), 0x0101_7100_001F);
             assert_eq!(
                 backend.protocol_features(),
-                VhostUserProtocolFeatures::CONFIG | VhostUserProtocolFeatures::MQ
+                VhostUserProtocolFeatures::CONFIG
+                    | VhostUserProtocolFeatures::MQ
+                    | VhostUserProtocolFeatures::BACKEND_REQ
+                    | VhostUserProtocolFeatures::BACKEND_SEND_FD
+                    | VhostUserProtocolFeatures::SHMEM
             );
+
+            let shmem_config = backend.get_shmem_config().unwrap();
+            assert_eq!(shmem_config.nregions, 1);
+            assert_eq!(shmem_config.memory_sizes[0], 0); // Region 0 unused
+            assert_eq!(shmem_config.memory_sizes[1], SHMEM_SIZE); // Region 1 is HOST_VISIBLE
+
             assert_eq!(backend.queues_per_thread(), vec![0xffff_ffff]);
             assert_eq!(backend.get_config(0, 0), Vec::<u8>::new());
 
@@ -1532,7 +1634,7 @@ mod tests {
             let vring = VringRwLock::new(mem, 0x1000).unwrap();
             vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
             vring.set_queue_ready(true);
-
+            backend.set_backend_req_fd(dummy_backend_request_socket());
             assert_eq!(
                 backend
                     .handle_event(0, EventSet::OUT, &[vring.clone()], 0)
@@ -1551,6 +1653,8 @@ mod tests {
 
             // Hit the loop part
             backend.set_event_idx(true);
+            backend.set_backend_req_fd(dummy_backend_request_socket());
+            backend.set_gpu_socket(gpu_backend_pair().1).unwrap();
             backend
                 .handle_event(0, EventSet::IN, &[vring.clone()], 0)
                 .unwrap();
@@ -1653,6 +1757,7 @@ mod tests {
                 .unwrap();
 
             backend.set_gpu_socket(gpu_backend).unwrap();
+            backend.set_backend_req_fd(dummy_backend_request_socket());
 
             // Unfortunately, there is no way to create a VringEpollHandler directly (the ::new is not public)
             // So we create a daemon to create the epoll handler for us here
@@ -1788,6 +1893,49 @@ mod tests {
                 writable_desc_lengths: &[RESP_SIZE],
             };
 
+            // Create blob resource command with backing memory
+            let hdr = new_hdr(VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB);
+            let cmd = virtio_gpu_resource_create_blob {
+                resource_id: 2.into(),
+                blob_mem: 1.into(),
+                blob_flags: 1.into(),
+                nr_entries: 1.into(),
+                blob_id: 0.into(),
+                size: 4096.into(),
+            };
+            let mem_entry = virtio_gpu_mem_entry {
+                addr: 0x1000.into(),
+                length: 4096.into(),
+                padding: 0.into(),
+            };
+            let create_blob_cmd = TestingDescChainArgs {
+                readable_desc_bufs: &[hdr.as_slice(), cmd.as_slice(), mem_entry.as_slice()],
+                writable_desc_lengths: &[RESP_SIZE],
+            };
+
+            // Map blob resource command
+            let hdr = new_hdr(VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB);
+            let cmd = virtio_gpu_resource_map_blob {
+                resource_id: 2.into(),
+                padding: Le32::default(),
+                offset: 0.into(),
+            };
+            let map_blob_cmd = TestingDescChainArgs {
+                readable_desc_bufs: &[hdr.as_slice(), cmd.as_slice()],
+                writable_desc_lengths: &[RESP_SIZE + 16],
+            };
+
+            // Unmap blob resource command
+            let hdr = new_hdr(VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB);
+            let cmd = virtio_gpu_resource_unmap_blob {
+                resource_id: 2.into(),
+                padding: Le32::default(),
+            };
+            let unmap_blob_cmd = TestingDescChainArgs {
+                readable_desc_bufs: &[hdr.as_slice(), cmd.as_slice()],
+                writable_desc_lengths: &[RESP_SIZE],
+            };
+
             // Create a control queue with all the commands defined above
             let commands = [
                 create_resource_cmd,
@@ -1801,6 +1949,9 @@ mod tests {
                 ctx_attach_cmd,
                 ctx_detach_cmd,
                 ctx_destroy_cmd,
+                create_blob_cmd,
+                map_blob_cmd,
+                unmap_blob_cmd,
             ];
             let (control_vring, _, _) = create_control_vring(&mem, &commands);
 
