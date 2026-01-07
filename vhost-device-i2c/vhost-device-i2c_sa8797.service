@@ -12,6 +12,7 @@ ExecStart=/usr/bin/vhost-device-i2c \
 --socket-path=/tmp/linux-vm2-i2c-skt \
 --socket-count=1 \
 --device-list "9:75:79"
+Slice=gvm.slice
 
 [Install]
 WantedBy=multi-user.target
