@@ -14,5 +14,7 @@ Environment=RUST_LOG=info
 ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1 --enable-sd-notify
 Type=notify
 NotifyAccess=main
+Slice=gvm.slice
+
 [Install]
 WantedBy = multi-user.target
