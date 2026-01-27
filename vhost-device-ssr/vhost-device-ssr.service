@@ -1,5 +1,6 @@
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
+# Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+
 [Unit]
 Description = launch vhost-device-ssr
 
@@ -11,7 +12,7 @@ DefaultDependencies = no
 
 [Service]
 Environment=RUST_LOG=info
-ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1 --enable-sd-notify
+ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1 --enable-sd-notify -p "vhost-device-ssr-la"
 Type=notify
 NotifyAccess=main
 Slice=gvm.slice
