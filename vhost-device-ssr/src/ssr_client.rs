@@ -128,7 +128,10 @@ impl VhSsrCtx {
         }
 
         // Look up the client name by ss_id; use "unknown client" if not found
-        let name = Ssr_Map.get(&self.ss_id).unwrap_or(&"unknown client").to_string();
+        let name = Ssr_Map
+            .get(&self.ss_id)
+            .unwrap_or(&"unknown client")
+            .to_string();
         Some((name, self.ssr_event))
     }
 
@@ -146,7 +149,7 @@ impl VhSsrCtx {
 
 pub trait SsrClient {
     /// Register client to SSR
-    fn register(&self) -> Result<u64, SsrClientError>;
+    fn register(&self, prefix_name: &str) -> Result<u64, SsrClientError>;
 
     /// Unregister client to SSR
     fn unregister(&self) -> Result<u64, SsrClientError>;
@@ -156,6 +159,7 @@ pub trait SsrClient {
 
     /// new default client
     fn new_default(
+        prefix_name: &str,
         client_name: String,
         ctx: Arc<Mutex<VhSsrCtx>>,
         event_handler: cb_func_with_ctx_t,
@@ -210,8 +214,8 @@ impl SsrClient for SsrVuClient {
         }
     }
 
-    fn register(&self) -> Result<u64, SsrClientError> {
-        let register_name = String::from("vhost-device-ssr:") + self.client_name.as_str();
+    fn register(&self, prefix_name: &str) -> Result<u64, SsrClientError> {
+        let register_name = format!("{}:{}", prefix_name, self.client_name.as_str());
         let name = CString::new(register_name.as_str())
             .unwrap_or_else(|_| panic!("New client name: {} failed", register_name));
         let ctx_ptr =
@@ -249,6 +253,7 @@ impl SsrClient for SsrVuClient {
     }
 
     fn new_default(
+        prefix_name: &str,
         client_name: String,
         ctx: Arc<Mutex<VhSsrCtx>>,
         event_handler: cb_func_with_ctx_t,
@@ -273,7 +278,7 @@ impl SsrClient for SsrVuClient {
             event_handler,
             priv_data,
         );
-        client.register().unwrap();
+        client.register(prefix_name).unwrap();
         client
     }
 }
