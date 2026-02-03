@@ -3,9 +3,11 @@
 [Unit]
 Description=Service to start vhost-device-i2c daemon
 
-After=remote-fs.target
+After=remote-fs.target tmp.mount
 
-Before=qcrosvm.service
+Before=qcrosvm.service shutdown.target
+Conflicts=shutdown.target
+DefaultDependencies=no
 
 [Service]
 ExecStart=/usr/bin/vhost-device-i2c \

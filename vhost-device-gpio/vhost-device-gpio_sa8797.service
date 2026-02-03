@@ -3,8 +3,10 @@
 
 [Unit]
 Description = launch vhost-device-gpio for pmic gpiochip
-
-Before = qcrosvm.service
+After=tmp.mount
+Before = qcrosvm.service shutdown.target
+Conflicts=shutdown.target
+DefaultDependencies=no
 
 [Service]
 Environment=RUST_LOG=info
