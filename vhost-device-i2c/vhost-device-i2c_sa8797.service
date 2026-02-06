@@ -15,5 +15,8 @@ ExecStart=/usr/bin/vhost-device-i2c \
 Slice=gvm.slice
 
 [Install]
-WantedBy=multi-user.target
-
+WantedBy = single-gvm.target
+WantedBy = multi-gvm.target
+WantedBy = safe-ivi.target
+WantedBy = nonsafe-ivi.target
+WantedBy = flex.target
