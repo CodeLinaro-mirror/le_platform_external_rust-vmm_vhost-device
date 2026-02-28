@@ -2,15 +2,15 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 [Unit]
-Description = launch vhost-device-ssr
+Description = launch vhost-device-ssr for LVGVM
 
 After = ssr-rm.service
 Requires = ssr-rm.service
-Before = qcrosvm.service
+Before = qcrosvm_lv.service
 
 [Service]
 Environment=RUST_LOG=info
-ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1,CDSP2,CDSP3,HPASSC0,HPASSC1,HPASSC2 --enable-sd-notify -p "vhost-device-ssr-la"
+ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm3-ssr-skt --clients-groups=CDSP,CDSP1,CDSP2,CDSP3,HPASSC0,HPASSC1,HPASSC2 --enable-sd-notify -p "vhost-device-ssr-lv"
 Type=notify
 NotifyAccess=main
 Slice=gvm.slice

@@ -281,7 +281,7 @@ mod tests {
         ctx: Arc<Mutex<VhSsrCtx>>,
     }
     impl SsrClient for MockSsrClient {
-        fn register(&self) -> Result<u64, SsrClientError> {
+        fn register(&self, _prefix_name: &str) -> Result<u64, SsrClientError> {
             Ok(0)
         }
 
@@ -294,6 +294,7 @@ mod tests {
         }
 
         fn new_default(
+            _prefix_name: &str,
             _client_name: String,
             ctx: Arc<Mutex<VhSsrCtx>>,
             _event_handler: vhost_device_ssr::ssr_clients_bindings::ssr_api::cb_func_with_ctx_t,
@@ -314,10 +315,18 @@ mod tests {
         let ssr_test_callback: cb_func_with_ctx_t = Some(ssr_virtio_event_handler);
         let notify_fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
         let ctx = Arc::new(Mutex::new(VhSsrCtx::new(Arc::clone(&notify_fd))));
-        let ssr_client0 =
-            MockSsrClient::new_default("test0".to_string(), ctx.clone(), ssr_test_callback);
-        let ssr_client1 =
-            MockSsrClient::new_default("test1".to_string(), ctx.clone(), ssr_test_callback);
+        let ssr_client0 = MockSsrClient::new_default(
+            "vhost-device-ssr",
+            "test0".to_string(),
+            ctx.clone(),
+            ssr_test_callback,
+        );
+        let ssr_client1 = MockSsrClient::new_default(
+            "vhost-device-ssr",
+            "test1".to_string(),
+            ctx.clone(),
+            ssr_test_callback,
+        );
         VuSsrBackend::new(Arc::new(vec![ssr_client0, ssr_client1]), ctx).unwrap()
     }
 
@@ -375,7 +384,7 @@ mod tests {
         vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
 
         // set vring call, otherwise process_event return Ok(false), see commit d8a6418b3487191dcd439e51d133ea99e019aef1
-        let file = unsafe { File::create("/dev/null").ok()};
+        let file = unsafe { File::create("/dev/null").ok() };
         vring.set_call(file);
         vring.set_queue_ready(false);
 
@@ -431,7 +440,7 @@ mod tests {
         // Artificial Vring
         let vring = VringRwLock::new(mem, 0x100).unwrap();
         vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
-        let file = unsafe { File::create("/dev/null").ok()};
+        let file = unsafe { File::create("/dev/null").ok() };
         vring.set_call(file);
         vring.set_queue_ready(false);
 
@@ -537,7 +546,7 @@ mod tests {
     fn verify_mock_client() {
         let backend = new_mockbackend::<MockSsrClient>();
         let client = backend.ssr_clients.get(0).unwrap();
-        assert_eq!(client.register(), Ok(0));
+        assert_eq!(client.register("vhost-device-ssr"), Ok(0));
         assert_eq!(client.unregister(), Ok(0));
         assert_eq!(client.trigger(), Ok(0));
         client.set_ctx(16, SSR_EVENT_FAULT_NOTIFY as u16);
