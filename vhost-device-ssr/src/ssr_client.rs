@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 use lazy_static::lazy_static;
 use log::error;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::io;
 use std::ptr::null_mut;
@@ -98,16 +98,14 @@ pub unsafe extern "C" fn ssr_virtio_event_handler(
 }
 
 pub(crate) struct VhSsrCtx {
-    ss_id: ssr_ss_id,
-    ssr_event: ssr_events,
+    pending: VecDeque<(ssr_ss_id, ssr_events)>,
     notify_fd: Arc<EventFd>,
 }
 
 impl VhSsrCtx {
     pub fn new(notify_fd: Arc<EventFd>) -> Self {
         VhSsrCtx {
-            ss_id: 0,
-            ssr_event: 0,
+            pending: VecDeque::new(),
             notify_fd,
         }
     }
@@ -117,33 +115,31 @@ impl VhSsrCtx {
         ss_id: ssr_ss_id,
         ssr_event: ssr_events,
     ) -> Result<(), io::Error> {
-        self.set_ctx(ss_id, ssr_event);
-        self.notify_fd.write(0x10)
+        self.pending.push_back((ss_id, ssr_event));
+        if self.pending.len() == 1 {
+            self.notify_fd.write(0x10)?;
+        }
+        Ok(())
     }
 
-    pub fn get_response(&self) -> Option<(String, ssr_events)> {
-        if self.ss_id == 0 && self.ssr_event == 0 {
-            log::warn!("self ss_id is 0, but get called!");
-            return None;
-        }
+    pub fn get_response(&mut self) -> Option<(String, ssr_events)> {
+        let (ss_id, ssr_event) = self.pending.pop_front()?;
 
         // Look up the client name by ss_id; use "unknown client" if not found
-        let name = Ssr_Map
-            .get(&self.ss_id)
-            .unwrap_or(&"unknown client")
-            .to_string();
-        Some((name, self.ssr_event))
+        let name = Ssr_Map.get(&ss_id).unwrap_or(&"unknown client").to_string();
+        Some((name, ssr_event))
     }
 
     pub fn reset(&mut self) {
-        self.set_ctx(0, 0);
-        // read notify_fd to avoid endless return in epoll_wait
-        self.notify_fd.read().ok();
+        if self.pending.is_empty() {
+            // read notify_fd to avoid endless return in epoll_wait
+            self.notify_fd.read().ok();
+        }
     }
 
-    pub fn set_ctx(&mut self, id: u32, event: u32) {
-        self.ss_id = id;
-        self.ssr_event = event;
+    #[cfg(test)]
+    pub fn push_pending(&mut self, ss_id: ssr_ss_id, ssr_event: ssr_events) {
+        self.pending.push_back((ss_id, ssr_event));
     }
 }
 
@@ -268,7 +264,7 @@ impl SsrClient for SsrVuClient {
             | SSR_EVENT_RESTART_COMPLETE;
 
         let event_mask: u64 = ((client_id as u64) << (SS_ID_SHIFT as u64)) | (event_bits as u64);
-        let mut client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
+        let client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
         let priv_data = AtomicPtr::new(client_ctx_ptr);
         let client = Self::new(
             client_magic,
@@ -317,8 +313,19 @@ mod tests {
                     &mut *ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
                 ssr_virtio_event_handler(SS_ID_LPASS, SSR_EVENT_FAULT_NOTIFY, ctx_ptr)
             };
-            assert_eq!(ctx.lock().unwrap().notify_fd.read().unwrap(), 16);
         }
+
+        let mut ctx = ctx.lock().unwrap();
+        assert_eq!(ctx.notify_fd.read().unwrap(), 16);
+        for _ in 0..10 {
+            assert_eq!(
+                ctx.get_response(),
+                Some(("adsp".to_string(), SSR_EVENT_FAULT_NOTIFY))
+            );
+            ctx.reset();
+        }
+        assert_eq!(ctx.get_response(), None);
+        assert_eq!(ctx.notify_fd.read().ok(), None);
     }
 
     #[test]
@@ -342,12 +349,19 @@ mod tests {
         let ev_count = epoll_handler.wait(-1, &mut ready_events[..]).unwrap();
         for i in 0..ev_count {
             if ready_events[i].data() == SSR_EVENT_IN_VRING_EPOLL as u64 {
-                let cxt_unlocked = ctx.lock().expect("lock failed!");
+                let mut cxt_unlocked = ctx.lock().expect("lock failed!");
                 let x = cxt_unlocked.notify_fd.read().unwrap();
                 let res = cxt_unlocked.get_response().unwrap();
-                assert_eq!(x, 16 * 10);
+                cxt_unlocked.reset();
+                assert_eq!(x, 16);
                 assert_eq!(res.0, "cdsp".to_string());
                 assert_eq!(res.1, SSR_EVENT_FAULT_NOTIFY);
+                for _ in 1..10 {
+                    let res = cxt_unlocked.get_response().unwrap();
+                    assert_eq!(res.0, "cdsp".to_string());
+                    assert_eq!(res.1, SSR_EVENT_FAULT_NOTIFY);
+                    cxt_unlocked.reset();
+                }
             }
         }
     }
@@ -375,10 +389,11 @@ mod tests {
 
                 for i in 0..ev_count {
                     if ready_events[i].data() == SSR_EVENT_IN_VRING_EPOLL as u64 {
-                        let cxt_unlocked = ctx_clone.lock().expect("lock failed!");
+                        let mut cxt_unlocked = ctx_clone.lock().expect("lock failed!");
                         let x = cxt_unlocked.notify_fd.read().unwrap();
                         assert_eq!(x, 16);
                         let res = cxt_unlocked.get_response();
+                        cxt_unlocked.reset();
                         match res {
                             Some(res) => {
                                 assert_eq!(res.1, index);
@@ -429,7 +444,7 @@ mod tests {
 
         let event_mask: u64 = ((client_id as u64) << (SS_ID_SHIFT as u64)) | (event_bits as u64);
 
-        let mut client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
+        let client_ctx_ptr: *mut ::std::os::raw::c_void = null_mut();
         let priv_data = AtomicPtr::new(client_ctx_ptr);
         let client = SsrVuClient::new(
             client_magic,
@@ -449,39 +464,33 @@ mod tests {
     fn verify_vh_ssr_ctx() {
         let notify_fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
         let mut ctx = VhSsrCtx::new(Arc::clone(&notify_fd));
-        assert_eq!(ctx.ss_id, 0);
-        assert_eq!(ctx.ssr_event, 0);
+        assert!(ctx.pending.is_empty());
         assert_eq!(ctx.get_response(), None);
 
-        ctx.set_ctx(SS_ID_CDSP, 1);
-        assert_eq!(ctx.ss_id, SS_ID_CDSP);
-        assert_eq!(ctx.ssr_event, 1);
-        assert_eq!(ctx.get_response(), Some(("cdsp".to_string(), 1)));
-
-        ctx.set_ctx(SS_ID_CDSP1, 1);
-        assert_eq!(ctx.ss_id, SS_ID_CDSP1);
-        assert_eq!(ctx.ssr_event, 1);
-        assert_eq!(ctx.get_response(), Some(("cdsp1".to_string(), 1)));
-
-        ctx.set_ctx(SS_ID_GPDSP0, 1);
-        assert_eq!(ctx.ss_id, SS_ID_GPDSP0);
-        assert_eq!(ctx.ssr_event, 1);
-        assert_eq!(ctx.get_response(), Some(("gpdsp0".to_string(), 1)));
-
-        ctx.set_ctx(SS_ID_GPDSP1, 1);
-        assert_eq!(ctx.ss_id, SS_ID_GPDSP1);
-        assert_eq!(ctx.ssr_event, 1);
-        assert_eq!(ctx.get_response(), Some(("gpdsp1".to_string(), 1)));
-
-        ctx.write_and_notify(2, 2).unwrap();
-        assert_eq!(ctx.ss_id, 2);
-        assert_eq!(ctx.ssr_event, 2);
+        ctx.write_and_notify(SS_ID_CDSP, 1).unwrap();
+        assert_eq!(ctx.pending.len(), 1);
         assert_eq!(ctx.notify_fd.read().ok(), Some(0x10));
-
+        assert_eq!(ctx.get_response(), Some(("cdsp".to_string(), 1)));
         ctx.reset();
-        // After reset, id and event are set to zero and value of notify_fd is 0, which return None
-        assert_eq!(ctx.ss_id, 0);
-        assert_eq!(ctx.ssr_event, 0);
+        assert!(ctx.pending.is_empty());
+        assert_eq!(ctx.notify_fd.read().ok(), None);
+
+        ctx.write_and_notify(SS_ID_CDSP1, 1).unwrap();
+        ctx.write_and_notify(SS_ID_GPDSP0, 2).unwrap();
+        ctx.write_and_notify(SS_ID_GPDSP1, 3).unwrap();
+        assert_eq!(ctx.pending.len(), 3);
+        // Only one eventfd write happens (empty→non-empty transition).
+        assert_eq!(ctx.notify_fd.read().ok(), Some(0x10));
+        assert_eq!(ctx.get_response(), Some(("cdsp1".to_string(), 1)));
+        ctx.reset(); // queue not empty yet, no eventfd read
+        assert_eq!(ctx.notify_fd.read().ok(), None);
+        assert_eq!(ctx.get_response(), Some(("gpdsp0".to_string(), 2)));
+        ctx.reset(); // queue not empty yet, no eventfd read
+        assert_eq!(ctx.notify_fd.read().ok(), None);
+        assert_eq!(ctx.get_response(), Some(("gpdsp1".to_string(), 3)));
+
+        ctx.reset(); // queue now empty, eventfd drained by reset
+        assert!(ctx.pending.is_empty());
         assert_eq!(ctx.notify_fd.read().ok(), None);
     }
 }
