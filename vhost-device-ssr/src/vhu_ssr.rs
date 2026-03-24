@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 use std::{
     io::{self, Result as IoResult},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex}, thread, time::Duration,
 };
 
 use thiserror::Error as ThisError;
@@ -81,7 +81,7 @@ type Result<T> = std::result::Result<T, VuSsrError>;
 
 impl From<VuSsrError> for io::Error {
     fn from(e: VuSsrError) -> Self {
-        Self::new(io::ErrorKind::Other, e)
+        Self::other(e)
     }
 }
 
@@ -115,13 +115,9 @@ impl<T: SsrClient> VuSsrBackend<T> {
         }
     }
 
-    /// Process the event once ssr_callback called and dispatch it to guest
+    /// Write one VirtioSsrOutHdr into the vring and notify the guest.
+    /// Caller must ensure vring is ready before calling this.
     fn process_event(&mut self, vring: &VringRwLock, out: VirtioSsrOutHdr) -> Result<bool> {
-        if vring.get_ref().get_call().is_none() {
-            log::warn!("Receive ssr-rm msg but virtio is not ready!!");
-            return Ok(false);
-        }
-
         let mem = self.mem.as_ref().unwrap().memory();
         let desc_chain = vring
             .get_mut()
@@ -145,58 +141,78 @@ impl<T: SsrClient> VuSsrBackend<T> {
                     log::error!("Couldn't write out data to the ring");
                     return Err(VuSsrError::UnexpectedWriteVringError);
                 }
-            }
-            None => {
-                log::warn!("no available descriptors in ring!");
-                // Now cannot get available descriptor, which means the host cannot process
-                // event data in time and overrun happens in the backend. In this case,
-                // we simply drop the incoming ssr event and notify guest for handling
-                // event. At the end, it returns Ok(false) so can avoid exiting the thread loop.
                 vring
                     .signal_used_queue()
                     .map_err(|_| VuSsrError::SendNotificationFailed)?;
-
-                return Ok(false);
+                Ok(true)
+            }
+            None => {
+                log::error!("no available descriptors in ring!");
+                // No descriptor available: notify guest to process pending entries and
+                // return false so the caller stops draining for this round.
+                vring
+                    .signal_used_queue()
+                    .map_err(|_| VuSsrError::SendNotificationFailed)?;
+                Ok(false)
             }
         }
-        // notify guest for handling events. At the end, it returns Ok(false) so can avoid exiting the thread loop.
-        vring
-            .signal_used_queue()
-            .map_err(|_| VuSsrError::SendNotificationFailed)?;
-
-        Ok(true)
     }
 
-    /// Process the event from ssr and dispatch replies
+    /// Drain pending SSR callbacks and dispatch them to the guest via the vring.
     fn process_queue(&mut self, vring: &VringRwLock) -> Result<bool> {
-        let response = {
-            let mut ctx_unlocked = self
-                .ctx
-                .lock()
-                .expect("Unable to get lock in process_event");
-            let response = ctx_unlocked.get_response();
-            ctx_unlocked.reset();
-            response
-        };
-        let (name, ssr_event) = match response {
-            Some(response) => (response.0, response.1),
-            None => return Ok(false),
-        };
+        // Gate: vring must be ready and have a call fd before we touch anything.
+        if vring.get_ref().get_call().is_none() || !vring.get_ref().get_queue().ready() {
+            log::info!("process_queue: vring not ready, leaving eventfd armed");
+            thread::sleep(Duration::from_millis(10));
+            return Ok(false);
+        }
 
-        // generated Before and After statuses just from one ssr event
-        let msgs: Vec<VirtioSsrOutHdr> = match ssr_event {
-            SSR_EVENT_FAULT_NOTIFY => vec![QCOM_SSR_BEFORE_SHUTDOWN, QCOM_SSR_AFTER_SHUTDOWN],
-            SSR_EVENT_RESTART_COMPLETE => vec![QCOM_SSR_AFTER_POWERUP],
-            SSR_EVENT_RESTART_START => vec![QCOM_SSR_BEFORE_POWERUP],
-            _ => return Ok(false),
+        let mut did_work = false;
+
+        loop {
+            // Take one callback response at a time (FIFO).
+            let response = {
+                let mut ctx = self
+                    .ctx
+                    .lock()
+                    .expect("Unable to get lock in process_queue");
+                let r = ctx.get_response();
+                if r.is_none() {
+                    // Queue drained: clear the eventfd so epoll stops firing.
+                    ctx.reset();
+                }
+                r
+            };
+
+            let (name, ssr_event) = match response {
+                Some(r) => r,
+                None => break,
+            };
+
+            // Expand one SSR event into 1-2 virtio messages and send each.
+            let event_types: &[QcomSsrNotifyType] = match ssr_event {
+                SSR_EVENT_FAULT_NOTIFY => &[QCOM_SSR_BEFORE_SHUTDOWN, QCOM_SSR_AFTER_SHUTDOWN],
+                SSR_EVENT_RESTART_COMPLETE => &[QCOM_SSR_AFTER_POWERUP],
+                SSR_EVENT_RESTART_START => &[QCOM_SSR_BEFORE_POWERUP],
+                _ => continue,
+            };
+
+            for &et in event_types {
+                let msg = VirtioSsrOutHdr::new(name.clone(), et);
+                match self.process_event(vring, msg)? {
+                    true => did_work = true,
+                    false => {
+                        // No descriptor available; stop for this round.
+                        // The SSR event is already consumed from ctx but the
+                        // virtio message was not delivered — acceptable per
+                        // the existing descriptor-starvation policy.
+                        return Ok(did_work);
+                    }
+                }
+            }
         }
-        .into_iter()
-        .map(|x| VirtioSsrOutHdr::new(name.clone(), x))
-        .collect();
-        for msg in msgs {
-            self.process_event(vring, msg)?;
-        }
-        Ok(true)
+
+        Ok(did_work)
     }
 }
 
@@ -266,6 +282,7 @@ impl<T: 'static + SsrClient + Sync + Send> VhostUserBackendMut for VuSsrBackend<
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
+    use std::fs::File;
     use std::result::Result;
     use vhost_device_ssr::ssr_clients_bindings::ssr_api::cb_func_with_ctx_t;
     use virtio_queue::Descriptor;
@@ -280,7 +297,7 @@ mod tests {
         ctx: Arc<Mutex<VhSsrCtx>>,
     }
     impl SsrClient for MockSsrClient {
-        fn register(&self) -> Result<u64, SsrClientError> {
+        fn register(&self, _prefix_name: &str) -> Result<u64, SsrClientError> {
             Ok(0)
         }
 
@@ -293,6 +310,7 @@ mod tests {
         }
 
         fn new_default(
+            _prefix_name: &str,
             _client_name: String,
             ctx: Arc<Mutex<VhSsrCtx>>,
             _event_handler: vhost_device_ssr::ssr_clients_bindings::ssr_api::cb_func_with_ctx_t,
@@ -305,7 +323,10 @@ mod tests {
     }
     impl MockSsrClient {
         fn set_ctx(&self, id: u16, event: u16) {
-            self.ctx.lock().unwrap().set_ctx(id.into(), event.into());
+            self.ctx
+                .lock()
+                .unwrap()
+                .push_pending(id.into(), event.into());
         }
     }
 
@@ -313,11 +334,19 @@ mod tests {
         let ssr_test_callback: cb_func_with_ctx_t = Some(ssr_virtio_event_handler);
         let notify_fd = Arc::new(EventFd::new(EFD_NONBLOCK).unwrap());
         let ctx = Arc::new(Mutex::new(VhSsrCtx::new(Arc::clone(&notify_fd))));
-        let ssr_client0 =
-            MockSsrClient::new_default("test0".to_string(), ctx.clone(), ssr_test_callback);
-        let ssr_client1 =
-            MockSsrClient::new_default("test1".to_string(), ctx.clone(), ssr_test_callback);
-        VuSsrBackend::new(vec![ssr_client0, ssr_client1], ctx).unwrap()
+        let ssr_client0 = MockSsrClient::new_default(
+            "vhost-device-ssr",
+            "test0".to_string(),
+            ctx.clone(),
+            ssr_test_callback,
+        );
+        let ssr_client1 = MockSsrClient::new_default(
+            "vhost-device-ssr",
+            "test1".to_string(),
+            ctx.clone(),
+            ssr_test_callback,
+        );
+        VuSsrBackend::new(Arc::new(vec![ssr_client0, ssr_client1]), ctx).unwrap()
     }
 
     #[test]
@@ -372,6 +401,10 @@ mod tests {
         // Artificial Vring
         let vring = VringRwLock::new(mem, 0x100).unwrap();
         vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
+
+        // set vring call, otherwise process_event return Ok(false), see commit d8a6418b3487191dcd439e51d133ea99e019aef1
+        let file = unsafe { File::create("/dev/null").ok() };
+        vring.set_call(file);
         vring.set_queue_ready(false);
 
         //Unavailable ssr event, return Ok(false)
@@ -382,7 +415,7 @@ mod tests {
                 .ctx
                 .lock()
                 .unwrap()
-                .set_ctx(8, SSR_EVENT_FAULT_NOTIFY);
+                .push_pending(8, SSR_EVENT_FAULT_NOTIFY);
         }
         // Create a descriptor chain with two descriptors.
         let desc = Descriptor::new(0x400_u64, 0x100, 0, 0);
@@ -405,7 +438,7 @@ mod tests {
         let used_idx = vring.queue_used_idx().unwrap();
         assert_eq!(used_idx, 0);
 
-        // The mock device returns Ok(true).
+        // SSR_EVENT_FAULT_NOTIFY expands to 2 messages; both descriptors consumed.
         assert_eq!(backend.process_queue(&vring), Ok(true));
         let used_idx = vring.queue_used_idx().unwrap();
         assert_eq!(used_idx, 2);
@@ -426,10 +459,13 @@ mod tests {
         // Artificial Vring
         let vring = VringRwLock::new(mem, 0x100).unwrap();
         vring.set_queue_info(0x100, 0x200, 0x300).unwrap();
+        let file = unsafe { File::create("/dev/null").ok() };
+        vring.set_call(file);
         vring.set_queue_ready(false);
 
         //Unavailable ssr event, return Ok(false)
         assert_eq!(backend.ctx.lock().unwrap().get_response(), None);
+        // vring ready=false, no descriptors available → process_event returns Ok(false)
         assert_eq!(
             backend.process_event(&vring, VirtioSsrOutHdr::new("name".to_string(), 10)),
             Ok(false)
@@ -439,7 +475,7 @@ mod tests {
                 .ctx
                 .lock()
                 .unwrap()
-                .set_ctx(8, SSR_EVENT_FAULT_NOTIFY);
+                .push_pending(8, SSR_EVENT_FAULT_NOTIFY);
         }
         // Create a descriptor chain with one descriptor.
         let desc = Descriptor::new(0x400_u64, 0x100, 0, 0);
@@ -476,7 +512,7 @@ mod tests {
                 .ctx
                 .lock()
                 .unwrap()
-                .set_ctx(8, SSR_EVENT_FAULT_NOTIFY);
+                .push_pending(8, SSR_EVENT_FAULT_NOTIFY);
         }
 
         // Artificial memory
@@ -530,7 +566,7 @@ mod tests {
     fn verify_mock_client() {
         let backend = new_mockbackend::<MockSsrClient>();
         let client = backend.ssr_clients.get(0).unwrap();
-        assert_eq!(client.register(), Ok(0));
+        assert_eq!(client.register("vhost-device-ssr"), Ok(0));
         assert_eq!(client.unregister(), Ok(0));
         assert_eq!(client.trigger(), Ok(0));
         client.set_ctx(16, SSR_EVENT_FAULT_NOTIFY as u16);

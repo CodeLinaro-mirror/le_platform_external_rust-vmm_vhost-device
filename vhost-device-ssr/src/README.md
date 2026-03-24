@@ -9,7 +9,7 @@ can be transported into FE through virtio.
 
 
 ## Synopsis
-vhost-device-ssr --socket-path <SOCKET> --clients-groups <CLIENTS_GROUPS>
+vhost-device-ssr --socket-path <SOCKET> --clients-groups <CLIENTS_GROUPS> --prefix-name <PREFIX_NAME>
 
 ## Options
 ```text
@@ -17,7 +17,11 @@ Options:
   -s, --socket-path <SOCKET>
           Location of vhost-user Unix domain socket
   -c, --clients-groups <CLIENTS_GROUPS>
-          names for ssr client, only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
+          names for ssr client, Support CDSP, CDSP1/2/3, ADSP, ADSP1/2 SLPI, GPDSP0/1, HPASSC0/1/2. ADSP1/2, CDSP2/3 and HPASSC0/1/2 are only applicable on SA8797
+  -e, --enable-sd-notify
+          Enable sd_notify
+  -p, --prefix-name <PREFIX_NAME>
+          Prefix name for registering; default: "vhost-device-ssr" [default: vhost-device-ssr]
   -h, --help
           Print help
   -V, --version
@@ -37,7 +41,8 @@ Note that from the above command the socket path "/some/path/ssr.sock0" and
 "/some/path/ssr.sock1" will be created for  CDSP,CDSP1 and  GPDSP0 GPDSP1
 respectively. Use `;` as delimiter.
 
-Now only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
+Support CDSP, CDSP1/2/3, ADSP, ADSP1/2 SLPI, GPDSP0/1, HPASSC0/1/2.
+Note: ADSP1/2, CDSP2/3 and HPASSC0/1/2 are only applicable on SA8797.
 
 ## License
 

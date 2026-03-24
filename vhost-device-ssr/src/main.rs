@@ -11,7 +11,6 @@ mod vhu_ssr;
 use clap::Parser;
 use log::error;
 use ssr_client::{ssr_virtio_event_handler, Client_Map, SsrClient, SsrVuClient, VhSsrCtx};
-use vhost::vhost_user::Listener;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::os::fd::AsRawFd;
@@ -20,6 +19,7 @@ use std::process::exit;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use thiserror::Error as ThisError;
+use vhost::vhost_user::Listener;
 use vhost_device_ssr::ssr_clients_bindings::ssr_api::cb_func_with_ctx_t;
 use vhost_user_backend::VhostUserDaemon;
 use vhu_ssr::{VuSsrBackend, SSR_EVENT_IN_VRING_EPOLL};
@@ -50,7 +50,8 @@ struct SsrArgs {
     socket_path: PathBuf,
 
     /// names for ssr client,
-    /// only support CDSP CDSP1 ADSP SLPI GPDSP0 GPDSP1
+    /// Support CDSP, CDSP1/2/3, ADSP, ADSP1/2 SLPI, GPDSP0/1, HPASSC0/1/2.
+    /// ADSP1/2, CDSP2/3 and HPASSC0/1/2 are only applicable on SA8797.
     #[clap(
         short = 'c',
         long,
@@ -67,6 +68,10 @@ struct SsrArgs {
         default_value_t = false
     )]
     enable_sd_notify: bool,
+
+    /// Prefix name for registering; default: "vhost-device-ssr"
+    #[clap(short = 'p', long, default_value = "vhost-device-ssr")]
+    prefix_name: String,
 }
 
 impl SsrArgs {
@@ -96,6 +101,7 @@ impl SsrArgs {
 /// vhost-device-ssr backend server.
 
 pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
+    prefix_name: String,
     socket: PathBuf,
     clients_list: Vec<String>,
     enable_sd_notify: bool,
@@ -107,7 +113,14 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
     let ssr_vu_clients = Arc::new(
         clients_list
             .iter()
-            .map(|c| D::new_default(c.to_string(), Arc::clone(&ctx), ssr_test_callback))
+            .map(|c| {
+                D::new_default(
+                    &prefix_name,
+                    c.to_string(),
+                    Arc::clone(&ctx),
+                    ssr_test_callback,
+                )
+            })
             .collect(),
     );
 
@@ -179,13 +192,13 @@ pub(crate) fn start_backend<D: 'static + SsrClient + Send + Sync>(args: SsrArgs)
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();
-
+        let prefix_name = args.prefix_name.clone();
         let sender = senders.clone();
         let handle = thread::Builder::new()
             .name(name.clone())
             .spawn(move || {
                 let result = std::panic::catch_unwind(move || {
-                    start_backend_server::<D>(socket, clients_list, enable_sd_notify)
+                    start_backend_server::<D>(prefix_name, socket, clients_list, enable_sd_notify)
                 });
 
                 // Notify the main thread that we are done.
@@ -228,6 +241,8 @@ mod tests {
         let args = SsrArgs {
             socket_path: PathBuf::from("/some/socket_path"),
             clients_groups: vec![String::from("CDSP,CDSP1"), String::from("GPDSP0,GPDSP1")],
+            enable_sd_notify: false,
+            prefix_name: "vhost-device-ssr".to_string(),
         };
         let paths = args.generate_socket_paths();
 
@@ -254,6 +269,8 @@ mod tests {
         let args = SsrArgs {
             socket_path: PathBuf::from("/some/socket_path"),
             clients_groups: vec![String::from("CDSP"), String::from("GPDSP0,GPDSP1")],
+            enable_sd_notify: false,
+            prefix_name: "vhost-device-ssr".to_string(),
         };
 
         // All configuration elements should be what we expect them to be.  Using
