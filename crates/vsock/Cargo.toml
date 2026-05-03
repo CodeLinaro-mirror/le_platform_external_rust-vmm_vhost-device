@@ -22,7 +22,7 @@ vhost-user-backend = "0.8"
 virtio-bindings = "0.2"
 virtio-queue = "0.7"
 virtio-vsock = "0.2.1"
-vm-memory = "0.10"
+vm-memory = "0.11"
 vmm-sys-util = "0.11"
 
 [dev-dependencies]
