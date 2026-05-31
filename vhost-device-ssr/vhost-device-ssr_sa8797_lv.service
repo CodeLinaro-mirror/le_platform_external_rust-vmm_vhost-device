@@ -16,4 +16,7 @@ NotifyAccess=main
 Slice=gvm.slice
 
 [Install]
-WantedBy = multi-user.target
+WantedBy = multi-gvm.target
+WantedBy = safe-ivi.target
+WantedBy = nonsafe-ivi.target
+WantedBy = flex.target

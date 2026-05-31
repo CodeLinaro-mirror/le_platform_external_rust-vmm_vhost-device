@@ -2,19 +2,18 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 
 [Unit]
-Description = launch vhost-device-ssr
-
-After = ssr-rm.service tmp.mount
-Requires = ssr-rm.service
+Description = launch vhost-device-gpio for pmic gpiochip
+After=tmp.mount
 Before = qcrosvm.service shutdown.target
-Conflicts = shutdown.target
-DefaultDependencies = no
+Conflicts=shutdown.target
+DefaultDependencies=no
 
 [Service]
 Environment=RUST_LOG=info
-ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1 --enable-sd-notify -p "vhost-device-ssr-la"
-Type=notify
-NotifyAccess=main
+ExecStart=/usr/bin/vhost-device-gpio \
+--socket-path=/tmp/linux-vm2-gpio-skt \
+--socket-count=1 \
+--device-list "1"
 Slice=gvm.slice
 
 [Install]
