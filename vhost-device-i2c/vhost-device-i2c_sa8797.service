@@ -3,16 +3,22 @@
 [Unit]
 Description=Service to start vhost-device-i2c daemon
 
-After=remote-fs.target
+After=remote-fs.target tmp.mount
 
-Before=qcrosvm.service
+Before=qcrosvm.service shutdown.target
+Conflicts=shutdown.target
+DefaultDependencies=no
 
 [Service]
 ExecStart=/usr/bin/vhost-device-i2c \
 --socket-path=/tmp/linux-vm2-i2c-skt \
 --socket-count=1 \
 --device-list "9:75:79"
+Slice=gvm.slice
 
 [Install]
-WantedBy=multi-user.target
-
+WantedBy = single-gvm.target
+WantedBy = multi-gvm.target
+WantedBy = safe-ivi.target
+WantedBy = nonsafe-ivi.target
+WantedBy = flex.target

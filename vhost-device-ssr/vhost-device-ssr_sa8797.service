@@ -4,14 +4,22 @@
 [Unit]
 Description = launch vhost-device-ssr
 
-After = ssr-rm.service
+After = ssr-rm.service tmp.mount
 Requires = ssr-rm.service
-Before = qcrosvm.service
+Before = qcrosvm.service shutdown.target
+Conflicts = shutdown.target
+DefaultDependencies = no
 
 [Service]
 Environment=RUST_LOG=info
-ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1,CDSP2,CDSP3,HPASSC0,HPASSC1,HPASSC2 --enable-sd-notify
+ExecStart = /usr/bin/vhost-device-ssr --socket-path=/tmp/linux-vm2-ssr-skt --clients-groups=CDSP,CDSP1,CDSP2,CDSP3,HPASSC0,HPASSC1,HPASSC2 --enable-sd-notify -p "vhost-device-ssr-la"
 Type=notify
 NotifyAccess=main
+Slice=gvm.slice
+
 [Install]
-WantedBy = multi-user.target
+WantedBy = single-gvm.target
+WantedBy = multi-gvm.target
+WantedBy = safe-ivi.target
+WantedBy = nonsafe-ivi.target
+WantedBy = flex.target

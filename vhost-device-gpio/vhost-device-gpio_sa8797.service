@@ -3,8 +3,11 @@
 
 [Unit]
 Description = launch vhost-device-gpio for pmic gpiochip
-
-Before = qcrosvm.service
+After=tmp.mount dev-gpiochip1.device
+Before = qcrosvm.service shutdown.target
+Conflicts=shutdown.target
+DefaultDependencies=no
+Wants=dev-gpiochip1.device
 
 [Service]
 Environment=RUST_LOG=info
@@ -15,4 +18,8 @@ ExecStart=/usr/bin/vhost-device-gpio \
 Slice=gvm.slice
 
 [Install]
-WantedBy=multi-user.target
+WantedBy = single-gvm.target
+WantedBy = multi-gvm.target
+WantedBy = safe-ivi.target
+WantedBy = nonsafe-ivi.target
+WantedBy = flex.target
