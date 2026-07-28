@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 use std::{
     io::{self, Result as IoResult},
-    sync::{Arc, Mutex}, thread, time::Duration,
+    sync::{Arc, Mutex},
 };
 
 use thiserror::Error as ThisError;
@@ -162,8 +162,7 @@ impl<T: SsrClient> VuSsrBackend<T> {
     fn process_queue(&mut self, vring: &VringRwLock) -> Result<bool> {
         // Gate: vring must be ready and have a call fd before we touch anything.
         if vring.get_ref().get_call().is_none() || !vring.get_ref().get_queue().ready() {
-            log::info!("process_queue: vring not ready, leaving eventfd armed");
-            thread::sleep(Duration::from_millis(10));
+            log::debug!("process_queue: vring not ready, leaving eventfd armed");
             return Ok(false);
         }
 
