@@ -3,7 +3,8 @@
 [Unit]
 Description = launch vhost-device-ssr
 
-After = ssr-rm.service tmp.mount disksymlink.service
+After = ssr-rm.service tmp.mount early-services.target
+Wants=early-services.target
 Requires = ssr-rm.service
 Before = qcrosvm.service shutdown.target
 Conflicts = shutdown.target
