@@ -43,7 +43,7 @@ use crate::{
             ErrInvalidContextId, ErrInvalidParameter, ErrInvalidResourceId, ErrInvalidScanoutId,
             ErrUnspec, OkCapset, OkCapsetInfo, OkNoData,
         },
-        VirtioGpuResult, VIRTIO_GPU_MAX_SCANOUTS,
+        VirtioGpuResult, VIRTIO_GPU_FLAG_INFO_RING_IDX, VIRTIO_GPU_MAX_SCANOUTS,
     },
     renderer::Renderer,
     GpuCapset, GpuConfig,
@@ -458,12 +458,25 @@ impl Renderer for VirglRendererAdapter {
     }
 
     fn create_fence(&mut self, fence: RutabagaFence) -> VirtioGpuResult {
-        // Convert the fence ID to u32
-        let fence_id_u32 = u32::try_from(fence.fence_id).map_err(|_| GpuResponse::ErrUnspec)?;
-
-        self.renderer
-            .create_fence(fence_id_u32, fence.ctx_id)
-            .map_err(|_| ErrUnspec)?;
+        if fence.flags & VIRTIO_GPU_FLAG_INFO_RING_IDX != 0 {
+            self.renderer
+                .context_create_fence(
+                    fence.ctx_id,
+                    fence.flags,
+                    fence.ring_idx as u32,
+                    fence.fence_id,
+                )
+                .map_err(|e| {
+                    error!("context_create_fence failed: {:?}", e);
+                    ErrUnspec
+                })?;
+        } else {
+            let fence_id_u32 =
+                u32::try_from(fence.fence_id).map_err(|_| GpuResponse::ErrUnspec)?;
+            self.renderer
+                .create_fence(fence_id_u32, fence.ctx_id)
+                .map_err(|_| ErrUnspec)?;
+        }
         Ok(OkNoData)
     }
 
@@ -486,6 +499,9 @@ impl Renderer for VirglRendererAdapter {
 
     fn event_poll(&self) {
         self.renderer.event_poll();
+        for &ctx_id in &self.context_ids {
+            self.renderer.context_poll(ctx_id);
+        }
     }
 
     fn force_ctx_0(&self) {
