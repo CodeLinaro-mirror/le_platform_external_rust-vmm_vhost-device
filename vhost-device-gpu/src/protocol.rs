@@ -95,6 +95,9 @@ pub const VIRTIO_GPU_BLOB_MEM_HOST3D_GUEST: u32 = 0x0003;
 pub const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
 pub const VIRTIO_GPU_FLAG_INFO_RING_IDX: u32 = 1 << 1;
 
+/// Feature bit for blob_alignment field in config (not in virtio_bindings yet).
+pub const VIRTIO_GPU_F_BLOB_ALIGNMENT: u32 = 5;
+
 /// Virtio Gpu Configuration
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(C)]
@@ -107,6 +110,8 @@ pub struct VirtioGpuConfig {
     pub num_scanouts: Le32,
     /// Maximum number of capability sets supported by the device
     pub num_capsets: Le32,
+    /// Minimum resource blob alignment
+    pub blob_alignment: Le32,
 }
 
 // SAFETY: The layout of the structure is fixed and can be initialized by
@@ -1205,7 +1210,7 @@ mod tests {
     #[test]
     fn test_virtio_gpu_config() {
         // Test VirtioGpuConfig size
-        assert_eq!(std::mem::size_of::<VirtioGpuConfig>(), 16);
+        assert_eq!(std::mem::size_of::<VirtioGpuConfig>(), 20);
     }
 
     #[test]
