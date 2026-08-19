@@ -84,13 +84,21 @@ pub unsafe extern "C" fn ssr_virtio_event_handler(
     if ctx.is_null() {
         return -1;
     }
-    let raw_ptr = ctx as *mut VhSsrCtx;
+
+    let mutex = &*(ctx as *const Mutex<VhSsrCtx>);
     log::info!(
         "Receive from callback: ssr_ss_id: {}, ssr_events:{}",
         ss_id,
         ssr_event
     );
-    if let Err(e) = (*raw_ptr).write_and_notify(ss_id, ssr_event) {
+    let mut guard = match mutex.lock() {
+        Ok(g) => g,
+        Err(e) => {
+            log::error!("lock ctx failed: {:?}", e);
+            return -1;
+        }
+    };
+    if let Err(e) = guard.write_and_notify(ss_id, ssr_event) {
         log::error!("write ctx eventfd failed: {:?}", e);
         return -1;
     }
@@ -214,8 +222,8 @@ impl SsrClient for SsrVuClient {
         let register_name = format!("{}:{}", prefix_name, self.client_name.as_str());
         let name = CString::new(register_name.as_str())
             .unwrap_or_else(|_| panic!("New client name: {} failed", register_name));
-        let ctx_ptr =
-            &mut *self.ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
+
+        let ctx_ptr = Arc::as_ptr(&self.ctx) as *mut ::std::os::raw::c_void;
         unsafe {
             let ret = ssr_register_callback_events(
                 self.client_magic,
@@ -309,8 +317,7 @@ mod tests {
 
         for _ in 0..10 {
             unsafe {
-                let ctx_ptr =
-                    &mut *ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
+                let ctx_ptr = Arc::as_ptr(&ctx) as *mut ::std::os::raw::c_void;
                 ssr_virtio_event_handler(SS_ID_LPASS, SSR_EVENT_FAULT_NOTIFY, ctx_ptr)
             };
         }
@@ -342,7 +349,7 @@ mod tests {
             )
             .unwrap();
         for _ in 0..10 {
-            let ctx_ptr = &mut *ctx.lock().unwrap() as *mut VhSsrCtx as *mut ::std::os::raw::c_void;
+            let ctx_ptr = Arc::as_ptr(&ctx) as *mut ::std::os::raw::c_void;
             unsafe { ssr_virtio_event_handler(SS_ID_CDSP, SSR_EVENT_FAULT_NOTIFY, ctx_ptr) };
         }
         let mut ready_events = vec![EpollEvent::default(); 10];
@@ -414,8 +421,7 @@ mod tests {
         for i in 1..10 {
             let ctx_clone = Arc::clone(&ctx);
             let handler = thread::spawn(move || {
-                let ctx_ptr = &mut *ctx_clone.lock().expect("lock failed") as *mut VhSsrCtx
-                    as *mut ::std::os::raw::c_void;
+                let ctx_ptr = Arc::as_ptr(&ctx_clone) as *mut ::std::os::raw::c_void;
                 unsafe { ssr_virtio_event_handler(i, i, ctx_ptr) };
             });
             unsafe { sleep(1) };
