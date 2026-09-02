@@ -103,7 +103,7 @@ impl Target for EmulatedTarget {
                                 | ReportLunsSelectReport::Administrative
                                 | ReportLunsSelectReport::TopLevel
                                 | ReportLunsSelectReport::SameConglomerate => {
-                                    respond_report_luns(&mut data_in, vec![].into_iter())
+                                    respond_report_luns(&mut data_in, vec![])
                                         .map_err(CmdError::DataIn)?;
                                 }
                             }
