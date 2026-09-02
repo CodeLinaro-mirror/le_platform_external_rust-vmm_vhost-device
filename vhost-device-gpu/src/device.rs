@@ -891,13 +891,14 @@ mod tests {
         backend::virgl::VirglRendererAdapter,
         gpu_types::{ResourceCreate3d, ResourceCreateBlob, Transfer3DDesc, VirtioGpuRing},
         protocol::{
-            virtio_gpu_ctrl_hdr, virtio_gpu_ctx_create, virtio_gpu_ctx_destroy,
-            virtio_gpu_ctx_resource, virtio_gpu_get_capset, virtio_gpu_get_capset_info,
-            virtio_gpu_mem_entry, virtio_gpu_rect, virtio_gpu_resource_assign_uuid,
-            virtio_gpu_resource_attach_backing, virtio_gpu_resource_create_2d,
-            virtio_gpu_resource_create_blob, virtio_gpu_resource_detach_backing,
-            virtio_gpu_resource_flush, virtio_gpu_resource_map_blob,
-            virtio_gpu_resource_unmap_blob, virtio_gpu_resource_unref, virtio_gpu_set_scanout,
+            virtio_gpu_cmd_submit, virtio_gpu_ctrl_hdr, virtio_gpu_ctx_create,
+            virtio_gpu_ctx_destroy, virtio_gpu_ctx_resource, virtio_gpu_get_capset,
+            virtio_gpu_get_capset_info, virtio_gpu_mem_entry, virtio_gpu_rect,
+            virtio_gpu_resource_assign_uuid, virtio_gpu_resource_attach_backing,
+            virtio_gpu_resource_create_2d, virtio_gpu_resource_create_blob,
+            virtio_gpu_resource_detach_backing, virtio_gpu_resource_flush,
+            virtio_gpu_resource_map_blob, virtio_gpu_resource_unmap_blob,
+            virtio_gpu_resource_unref, virtio_gpu_set_scanout,
             GpuResponse::{
                 self, OkCapset, OkCapsetInfo, OkDisplayInfo, OkEdid, OkMapInfo, OkNoData,
             },
@@ -907,10 +908,10 @@ mod tests {
             VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB,
             VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING, VIRTIO_GPU_CMD_RESOURCE_FLUSH,
             VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB, VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
-            VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D,
-            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D,
-            VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM, VIRTIO_GPU_RESP_ERR_UNSPEC,
-            VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_GPU_TEXTURE_2D,
+            VIRTIO_GPU_CMD_SET_SCANOUT, VIRTIO_GPU_CMD_SUBMIT_3D,
+            VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D, VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
+            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D, VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM,
+            VIRTIO_GPU_RESP_ERR_UNSPEC, VIRTIO_GPU_RESP_OK_NODATA, VIRTIO_GPU_TEXTURE_2D,
         },
         renderer::Renderer,
         testutils::{create_vring, TestingDescChainArgs},
@@ -1865,6 +1866,24 @@ mod tests {
                 writable_desc_lengths: &[RESP_SIZE],
             };
 
+            // Construct a SUBMIT_3D command to submit commands to the context
+            let hdr_submit = virtio_gpu_ctrl_hdr {
+                type_: VIRTIO_GPU_CMD_SUBMIT_3D.into(),
+                flags: (VIRTIO_GPU_FLAG_FENCE | VIRTIO_GPU_FLAG_INFO_RING_IDX).into(),
+                fence_id: 1.into(),
+                ctx_id: 1.into(),
+                ring_idx: 0,
+                padding: [0u8; 3],
+            };
+            let cmd_submit = virtio_gpu_cmd_submit {
+                size: 0.into(),
+                num_in_fences: 0.into(),
+            };
+            let ctx_submit_cmd = TestingDescChainArgs {
+                readable_desc_bufs: &[hdr_submit.as_slice(), cmd_submit.as_slice()],
+                writable_desc_lengths: &[RESP_SIZE],
+            };
+
             // Construct a command to detach a context for the given ctx_id in the hdr
             let hdr = new_hdr(VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE);
             let cmd = virtio_gpu_ctx_resource::default();
@@ -1951,6 +1970,7 @@ mod tests {
                 detach_backing_cmd,
                 ctx_create_cmd,
                 ctx_attach_cmd,
+                ctx_submit_cmd,
                 ctx_detach_cmd,
                 ctx_destroy_cmd,
                 create_blob_cmd,
