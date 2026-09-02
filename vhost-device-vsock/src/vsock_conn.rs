@@ -262,22 +262,21 @@ impl<S: AsRawFd + ReadVolatile + Write + WriteVolatile + IsHybridVsock> VsockCon
                 // Already updated the credit
 
                 // Re-register the stream file descriptor for read and write events
-                if VhostUserVsockThread::epoll_modify(
+                if let Err(e) = VhostUserVsockThread::epoll_modify(
                     self.epoll_fd,
                     self.stream.as_raw_fd(),
                     epoll::Events::EPOLLIN | epoll::Events::EPOLLOUT,
                 )
-                .is_err()
-                {
-                    if let Err(e) = VhostUserVsockThread::epoll_register(
+                .or_else(|_| {
+                    VhostUserVsockThread::epoll_register(
                         self.epoll_fd,
                         self.stream.as_raw_fd(),
                         epoll::Events::EPOLLIN | epoll::Events::EPOLLOUT,
-                    ) {
-                        // TODO: let's move this logic out of this func, and handle it properly
-                        error!("epoll_register failed: {e:?}, but proceed further.");
-                    }
-                };
+                    )
+                }) {
+                    // TODO: let's move this logic out of this func, and handle it properly
+                    error!("epoll_register failed: {e:?}, but proceed further.");
+                }
             }
             VSOCK_OP_CREDIT_REQUEST => {
                 // Send back this connection's credit information
