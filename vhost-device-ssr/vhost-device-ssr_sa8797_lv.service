@@ -4,7 +4,8 @@
 [Unit]
 Description = launch vhost-device-ssr for LVGVM
 
-After = ssr-rm.service
+After = ssr-rm.service early-services.target
+Wants=early-services.target
 Requires = ssr-rm.service
 Before = qcrosvm_lv.service
 
