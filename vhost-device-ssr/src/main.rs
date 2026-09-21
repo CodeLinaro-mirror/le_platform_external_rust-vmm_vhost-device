@@ -156,20 +156,24 @@ pub(crate) fn start_backend_server<D: 'static + SsrClient + Send + Sync>(
 
         // For this convenience function we are not treating certain "expected"
         // outcomes as error. Disconnects and partial messages can be usual
-        // behaviour seen from quitting guests.
-        let err = match &result {
-            Err(e) => match e {
-                vhost_user_backend::Error::HandleRequest(vhost::vhost_user::Error::Disconnected) => Ok(()),
-                vhost_user_backend::Error::HandleRequest(vhost::vhost_user::Error::PartialMessage) =>  Ok(()),
-                _ => return result.map_err(Error::ServeFailed),
-            },
-            _ => return result.map_err(Error::ServeFailed),
-        };
-
-        if let Err(e) = err {
-            log::error!("Error serving daemon: {}", e);
-            vu_ssr_backend.read().unwrap().unregister_clients();
-            return Err(e);
+        // behaviour seen from quitting guests, so we reconnect. wait() already
+        // folds SocketBroken into Ok(()), which is also just a disconnect.
+        match result {
+            Ok(())
+            | Err(vhost_user_backend::Error::HandleRequest(
+                vhost::vhost_user::Error::Disconnected,
+            ))
+            | Err(vhost_user_backend::Error::HandleRequest(
+                vhost::vhost_user::Error::PartialMessage,
+            )) => {
+                log::info!("client disconnected, reconnecting");
+                continue;
+            }
+            Err(e) => {
+                log::error!("Error serving daemon: {}", e);
+                vu_ssr_backend.read().unwrap().unregister_clients();
+                return Err(Error::ServeFailed(e));
+            }
         }
     }
 }
