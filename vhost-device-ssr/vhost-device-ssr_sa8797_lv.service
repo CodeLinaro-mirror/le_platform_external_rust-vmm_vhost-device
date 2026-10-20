@@ -4,10 +4,12 @@
 [Unit]
 Description = launch vhost-device-ssr for LVGVM
 
-After = ssr-rm.service early-services.target
+After = ssr-rm.service early-services.target tmp.mount
 Wants=early-services.target
 Requires = ssr-rm.service
-Before = qcrosvm_lv.service
+Before = qcrosvm_lv.service shutdown.target
+Conflicts = shutdown.target
+DefaultDependencies = no
 
 [Service]
 Environment=RUST_LOG=info
